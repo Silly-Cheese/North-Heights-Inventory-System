@@ -1,5 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
 import { initPhase3 } from './phase3.js?v=20261101-forms3';
+import { bindRoomSaveForm } from './room-save.js?v=20261101-roomsave1';
 import { initPhase4 } from './phase4.js?v=20261101-forms3';
 import { query, orderBy, limit } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendEmailVerification, reload, getIdToken } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
@@ -434,7 +435,53 @@ function roomEditor(room=null) {
     '<div class="field"><label>Progress</label><select name="status">'+
     Object.entries(STATUS).filter(([k])=>['not-started','in-progress'].includes(k)).map(([k,v])=>'<option value="'+E(k)+'" '+((room?.status||'not-started')===k?'selected':'')+'>'+E(v)+'</option>').join('')+
     '</select><span class="small muted">Use Submit for Review and Verify in the room to complete a review.</span></div>'+
-    '<p class="form-error" id="roomFormError"></p><div class="modal-foot"><button type="button" class="btn" data-action="closeModal">Cancel</button><button class="btn primary" type="submit">Save room</button></div></form>');
+    '<p class="form-error" id="roomFormError" role="alert" aria-live="assertive"></p><div class="modal-foot"><button type="button" class="btn" data-action="closeModal">Cancel</button><button class="btn primary" type="button" data-room-save>Save room</button></div></form>');
+  const form=$('roomForm');
+  bindRoomSaveForm(form,{
+    performSave: async fd=>{
+      if(!canEdit() || !state.user)throw new Error('Your account does not have editing access.');
+      const space=state.space;
+      const id=String(fd.get('id')||''),name=String(fd.get('name')||'').trim();
+      if(!name || name.length>120)throw new Error('Enter a room name up to 120 characters.');
+      const original=id?findRoom(id):null;
+      if(id && !original)throw new Error('This room is no longer available. Refresh and try again.');
+      const status=String(fd.get('status')||'not-started');
+      if(!['not-started','in-progress'].includes(status))throw new Error('Invalid room status.');
+      const values={
+        name,description:String(fd.get('description')||'').trim(),status,
+        assignedTo:String(fd.get('assignedTo')||''),
+        reviewNote:original?.reviewNote||'',
+        submittedBy:original?.submittedBy||'',
+        submittedAt:original?.submittedAt||null,
+        verifiedBy:original?.verifiedBy||'',
+        verifiedAt:original?.verifiedAt||null,
+        updatedAt:serverTimestamp(),updatedBy:state.user.uid
+      };
+      if(original?.status==='verified'){
+        values.verifiedAt=null;values.verifiedBy='';
+        values.reviewNote='Room changed after verification; recheck required.';
+      }
+      let reference;
+      if(id){
+        reference=roomRef(id);
+        await updateDoc(reference,values);
+      }else{
+        reference=await addDoc(roomsPath(),{
+          ...values,createdAt:serverTimestamp(),createdBy:state.user.uid,deletedAt:null
+        });
+      }
+      return {id:reference.id,name,space,created:!id};
+    },
+    onSuccess: async result=>{
+      closeModal();
+      toast((result.created?'Room created: ':'Room updated: ')+result.name);
+      if(state.space===result.space)showPage('rooms');
+    },
+    onFailure: error=>{
+      if(error?.code==='permission-denied')
+        toast('Firestore rejected the room save. Review the message in the editor.',true);
+    }
+  });
 }
 function itemEditor(item=null, defaultRoom=null) {
   if(!canEdit())return toast('Your account has read-only access.',true);
@@ -690,25 +737,12 @@ document.addEventListener('submit', async event => {
       state.latestInvite=result.data.code;render();toast('One-time authorization code created.');
     }catch(error){catchError(error);}finally{btn.disabled=false;}return;
   }
-  if (!['roomForm','itemForm'].includes(event.target.id)) return;
+  if (event.target.id !== 'itemForm') return;
   event.preventDefault();
   if(!canEdit()){toast('Read-only account.',true);return;}
   const form=event.target; const fd=new FormData(form);
   const button=form.querySelector('[type="submit"]'); button.disabled=true;
   try {
-    if(form.id==='roomForm') {
-      const id=String(fd.get('id')||''), name=String(fd.get('name')||'').trim();
-      if(!name) throw new Error('Room name is required.');
-      const old=id?findRoom(id):null;
-      const values={name,description:String(fd.get('description')||'').trim(),status:String(fd.get('status')),
-        assignedTo:String(fd.get('assignedTo')||''),reviewNote:old?.reviewNote||'',submittedBy:old?.submittedBy||'',
-        submittedAt:old?.submittedAt||null,verifiedBy:old?.verifiedBy||'',verifiedAt:old?.verifiedAt||null,
-        updatedAt:serverTimestamp(),updatedBy:state.user.uid};
-      if(old?.status==='verified' && values.status!=='verified'){values.verifiedAt=null;values.verifiedBy='';}
-      if(id) await updateDoc(roomRef(id),values);
-      else await addDoc(roomsPath(),{...values,createdAt:serverTimestamp(),createdBy:state.user.uid,deletedAt:null});
-      closeModal();toast('Room saved.');
-    }
     if(form.id==='itemForm') {
       const id=String(fd.get('id')||''), quantity=Number(fd.get('quantity')), name=String(fd.get('name')||'').trim(), roomId=String(fd.get('roomId')||'');
       if(!name || !roomId || !Number.isInteger(quantity) || quantity<0 || quantity>1000000) throw new Error('Enter an item name, valid room, and whole-number quantity (0 to 1,000,000).');
@@ -733,6 +767,7 @@ document.addEventListener('submit', async event => {
       closeModal();toast('Item saved.');
     }
   } catch(error) {
-    const err=$(form.id==='roomForm'?'roomFormError':'itemFormError'); if(err) err.textContent=errMessage(error);
+    console.error('Inventory item save failed:',error);
+    const err=$('itemFormError'); if(err) err.textContent=errMessage(error);
   } finally { button.disabled=false; }
 });
