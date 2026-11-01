@@ -47,7 +47,8 @@ service cloud.firestore {
       return (
         request.resource.data.status != 'verified' ||
         (resource.data.status == 'verified' &&
-          request.resource.data.verifiedBy == resource.data.verifiedBy) ||
+          request.resource.data.verifiedBy == resource.data.verifiedBy &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['assignedTo','updatedAt','updatedBy'])) ||
         (resource.data.status == 'ready-for-review' &&
           request.resource.data.verifiedBy == request.auth.uid &&
           request.resource.data.submittedBy == resource.data.submittedBy &&
@@ -71,7 +72,10 @@ service cloud.firestore {
     }
     match /workspaces/{space}/rooms/{roomId} {
       allow read: if authorized() && workspace(space);
-      allow create: if editor() && workspace(space) && validRoom() && createdByUser();
+      allow create: if editor() && workspace(space) && validRoom() && createdByUser() &&
+        request.resource.data.status in ['not-started','in-progress'] &&
+        request.resource.data.get('submittedBy','') == '' &&
+        request.resource.data.get('verifiedBy','') == '';
       allow update: if editor() && workspace(space) && validRoom() && updatedByUser() && verifyAllowed(space);
       allow delete: if editor() && space == 'test';
     }
@@ -85,6 +89,23 @@ service cloud.firestore {
     match /workspaces/{space}/activity/{eventId} {
       allow read: if authorized() && workspace(space);
       allow write: if false;
+    }
+    // Phase 3 decisions and frozen snapshots are written exclusively by the Admin SDK.
+    match /workspaces/{space}/dispositions/{itemId} {
+      allow read: if authorized() && workspace(space);
+      allow write: if false;
+    }
+    match /workspaces/{space}/dispositionEvents/{eventId} {
+      allow read: if authorized() && workspace(space);
+      allow write: if false;
+    }
+    match /workspaces/{space}/snapshots/{snapshotId} {
+      allow read: if authorized() && workspace(space);
+      allow write: if false;
+      match /entries/{entryId} {
+        allow read: if authorized() && workspace(space);
+        allow write: if false;
+      }
     }
     match /{document=**} { allow read, write: if false; }
   }

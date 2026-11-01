@@ -1,0 +1,34 @@
+/* Phase 3: property dispositions, reports and print-ready documents. */
+.p3-metrics{margin-bottom:19px}
+.p3-metrics .metric{padding:15px}
+.p3-metrics .metric-number{font-size:1.65rem}
+.p3-allocation{display:grid;grid-template-columns:1fr 125px;align-items:center;gap:12px;border-bottom:1px solid #e5eee8;padding:7px 0}
+.p3-allocation label{font-weight:700;font-size:.83rem}
+.p3-allocation input{width:100%;padding:9px 11px;border:1px solid #cddbd3;border-radius:9px}
+.p3-allocations{border:1px solid #dfe9e3;background:#f9fcf9;border-radius:11px;padding:9px 13px}
+.p3-allocation:last-child{border:0}
+.p3-review-details{padding:13px;background:#f1f7f3;border-radius:10px;margin-bottom:17px;line-height:1.5}
+.p3-review-details p{margin:7px 0 0}
+.p3-report-controls{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px}
+.p3-report-controls .field{min-width:0}
+.p3-report-controls select{width:100%;padding:11px}
+@media(max-width:760px){
+  .mobile-nav{grid-template-columns:repeat(6,minmax(0,1fr))}
+  .mobile-tab{font-size:.59rem;padding:7px 1px}
+  .mobile-tab span{font-size:1.02rem}
+  .p3-report-controls{grid-template-columns:1fr}
+  .p3-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .p3-allocation{grid-template-columns:1fr 90px}
+}
+#phase3PrintRoot{display:none}
+@media print{
+  body:has(#phase3PrintRoot) #app,body:has(#phase3PrintRoot) #auth,body:has(#phase3PrintRoot) #splash{display:none!important}
+  #phase3PrintRoot{display:block!important;color:#000;background:#fff;font:10pt Georgia,serif}
+  #phase3PrintRoot h1{font:bold 18pt Georgia,serif;margin:0 0 8pt}
+  #phase3PrintRoot h2{font:bold 14pt Georgia,serif;margin:0 0 8pt}
+  #phase3PrintRoot table{border-collapse:collapse;width:100%;table-layout:fixed;font:8pt Arial,sans-serif}
+  #phase3PrintRoot th,#phase3PrintRoot td{border:1px solid #888;padding:5pt;overflow-wrap:anywhere;vertical-align:top}
+  #phase3PrintRoot th{background:#eee}
+  #phase3PrintRoot .signatures{margin-top:28pt}
+  @page{margin:13mm;size:landscape}
+}

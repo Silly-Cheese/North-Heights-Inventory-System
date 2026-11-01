@@ -1,4 +1,5 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
+import { initPhase3 } from './phase3.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
 import { getFirestore, collection, doc, getDoc, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp, increment, runTransaction } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js';
 
@@ -23,7 +24,7 @@ const state = { user: null, member: null, space: 'test', page: 'dashboard', room
 const STATUS = { 'not-started': 'Not started', 'in-progress': 'In progress', 'ready-for-review': 'Ready for review', verified: 'Verified' };
 const CATEGORIES = ['Furniture','Worship Supplies','Audio & Video','Books & Literature','Kitchen','Office Supplies','Electronics','Cleaning','Decorations','Other'];
 const CONDITIONS = ['Not assessed','Excellent','Good','Fair','Poor','Broken'];
-const NAV = [ ['dashboard','▦','Dashboard'], ['rooms','▤','Rooms'], ['items','▣','All Inventory'], ['trash','♻','Trash'], ['activity','◷','Activity'], ['settings','⚙','Settings'] ];
+const NAV = [ ['dashboard','▦','Dashboard'], ['rooms','▤','Rooms'], ['items','▣','All Inventory'], ['trash','♻','Trash'], ['activity','◷','Activity'], ['dispositions','⇄','Dispositions'], ['reports','▧','Reports'], ['settings','⚙','Settings'] ];
 
 function escapeHTML(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 const E = escapeHTML;
@@ -53,6 +54,8 @@ function errMessage(error) {
   return error?.message || 'Something went wrong. Please try again.';
 }
 function catchError(error) { console.error(error); toast(errMessage(error), true); }
+const phase3=initPhase3({state,db,call,E,header,modeBanner,canEdit,isOwner,roomName,activeRooms,
+  activeItems,getPerson,toast,catchError,openModal,modalHeading,closeModal,confirmDialog,renderMain});
 function showPage(page, roomId = null) {
   state.page = page; state.roomId = roomId; state.search = ''; render();
   window.scrollTo({ top:0, behavior:'instant' });
@@ -61,6 +64,7 @@ function stopListeners() { state.unsub.forEach(fn => fn()); state.unsub = []; }
 function subscribe() {
   stopListeners(); state.ready = false; state.rooms = []; state.items = [];
   state.members = []; state.activity = []; state.invites = [];
+  phase3.subscribe(fn=>state.unsub.push(fn));
   render();
   let gotRooms = false, gotItems = false;
   const received = () => { if (gotRooms && gotItems) state.ready = true; render(); };
@@ -303,6 +307,9 @@ function settingsPage() {
     '<div class="panel panel-pad"><h2>Account & workspace</h2>'+
     '<div class="setting-row"><div><strong>Signed-in account</strong><p>'+E(state.user?.email||'')+'</p></div><span class="badge slate">'+E(state.member?.role||'member')+'</span></div>'+
     '<div class="setting-row"><div><strong>Current workspace</strong><p>Switch between testing and official records using the top selector.</p></div><span class="badge '+(state.space==='test'?'test':'official')+'">'+(state.space==='test'?'TEST':'OFFICIAL')+'</span></div>'+
+    '<div class="setting-row"><div><strong>Reports and archives</strong><p>Open Phase 3 PDF/CSV reports, condition summaries, and inventory snapshots.</p></div><button class="btn" data-action="go" data-page="reports">Open reports</button></div>'+
+    '<div class="setting-row"><div><strong>Activity history</strong><p>Review recent modifications across the inventory.</p></div><button class="btn" data-action="go" data-page="activity">View history</button></div>'+
+    (state.space==='official'?'<div class="setting-row"><div><strong>Recoverable Trash</strong><p>Restore official rooms and items removed from inventory.</p></div><button class="btn" data-action="go" data-page="trash">Open Trash</button></div>':'')+
     '<div class="setting-row"><div><strong>Export active inventory</strong><p>Download a CSV containing rooms and item quantities.</p></div><button class="btn" data-action="export">Export CSV</button></div>'+
     (state.space==='test'&&canEdit()?
       '<div class="setting-row"><div><strong>Generate sample data</strong><p>Add four sample rooms and several items for testing.</p></div><button class="btn" data-action="seed">Generate examples</button></div>'+
@@ -319,6 +326,8 @@ function mainHTML() {
   if (state.page === 'items') return itemsPage();
   if (state.page === 'trash') return trashPage();
   if (state.page === 'activity') return activityPage();
+  if (state.page === 'dispositions') return phase3.dispositionPage();
+  if (state.page === 'reports') return phase3.reportPage();
   return settingsPage();
 }
 function render() {
@@ -329,7 +338,7 @@ function render() {
     nav.map(([id,icon,title])=>'<button class="nav-link ' + (currentNav===id?'active':'') + '" data-action="go" data-page="' + id + '"><span class="nav-symbol">' + icon + '</span>' + title + '</button>').join('') +
     '</nav></div><div class="sidebar-spacer"></div><div class="sidebar-user"><div class="avatar">' + E((state.member?.displayName || state.user.email || 'N').charAt(0).toUpperCase()) + '</div><div style="min-width:0"><div class="user-name">' + E(state.member?.displayName || state.user.email) + '</div><div class="user-role">' + E(state.member?.role || 'member') + ' · North Heights</div></div></div></aside>' +
     '<main class="main"><div class="topbar"><div><div class="topbar-sub">North Heights Church of Christ</div><div class="topbar-heading">Inventory Management</div></div><div class="view-mode"><span class="hide-mobile">Workspace</span><select class="mode-select" id="spaceSelector" aria-label="Select workspace"><option value="test" ' + (state.space==='test'?'selected':'') + '>◆ TEST MODE</option><option value="official" ' + (state.space==='official'?'selected':'') + '>● OFFICIAL</option></select></div></div><div class="content" id="mainContent">' + mainHTML() + '</div></main>' +
-    '<nav class="mobile-nav">' + [['dashboard','▦','Home'],['rooms','▤','Rooms'],['items','▣','Items'],['settings','⚙','More']].map(([id,icon,label])=>'<button class="mobile-tab ' + (currentNav===id?'active':'') + '" data-action="go" data-page="' + id + '"><span>' + icon + '</span>' + label + '</button>').join('') + '</nav></div>';
+    '<nav class="mobile-nav">' + [['dashboard','▦','Home'],['rooms','▤','Rooms'],['items','▣','Items'],['dispositions','⇄','Plans'],['reports','▧','Reports'],['settings','⚙','More']].map(([id,icon,label])=>'<button class="mobile-tab ' + (currentNav===id?'active':'') + '" data-action="go" data-page="' + id + '"><span>' + icon + '</span>' + label + '</button>').join('') + '</nav></div>';
 }
 function renderMain() { const target = $('mainContent'); if (target) target.innerHTML = mainHTML(); }
 function openModal(html) { const modal = $('modal'); modal.innerHTML = '<div class="modal-inner">' + html + '</div>'; if (!modal.open) modal.showModal(); }
@@ -478,23 +487,25 @@ async function seedTest() {
   await writeChunks(actions); toast('Sample inventory added to Test workspace.');
 }
 async function resetTest() {
-  if (state.space !== 'test') return;
-  const response = prompt('Type RESET TEST to permanently delete ALL test rooms and items. Official data will be untouched.');
-  if (response !== 'RESET TEST') { toast('Reset cancelled.'); return; }
-  await writeChunks([...state.items.map(i=>({type:'delete',ref:itemRef(i.id)})),...state.rooms.map(r=>({type:'delete',ref:roomRef(r.id)}))]);
-  await Promise.all(state.items.filter(i=>i.photoPath).map(i=>deleteObject(storageRef(storage,i.photoPath)).catch(err=>console.warn('Photo cleanup:',err))));
-  toast('Testing workspace reset.'); showPage('dashboard');
+  if(state.space!=='test'||!canEdit())return;
+  const response=prompt('Type RESET TEST to permanently delete ALL TEST rooms, items, photographs, disposition proposals, snapshots, and activity. Official records are not affected.');
+  if(response!=='RESET TEST'){toast('Reset cancelled.');return;}
+  const result=await call('resetTestWorkspace',{confirm:'RESET TEST'});
+  toast(result?.data?.photoCleanupWarning?'Test records reset; some test photos may need manual cleanup.':'Testing workspace fully reset.');
+  showPage('dashboard');
 }
 function switchSpace(space) {
   if (!['test','official'].includes(space) || space===state.space) return;
   state.space=space; state.page='dashboard'; state.roomId=null; state.search=''; subscribe();
 }
 document.addEventListener('change', async event => {
+  if(phase3.handleChange(event))return;
   const target = event.target;
   if (target.id==='spaceSelector') { switchSpace(target.value); return; }
 
 });
 document.addEventListener('input', event => {
+  if(phase3.handleInput(event)) return;
   if(event.target.id !== 'inventorySearch') return;
   state.search = event.target.value;
   const start = event.target.selectionStart;
@@ -503,6 +514,8 @@ document.addEventListener('input', event => {
   if(input) { input.focus(); input.setSelectionRange(start,start); }
 });
 document.addEventListener('click', async event => {
+  const phaseButton=event.target.closest('[data-p3]');
+  if(phaseButton){await phase3.handleClick(phaseButton);return;}
   const button = event.target.closest('[data-action]'); if (!button) return;
   const action = button.dataset.action, id = button.dataset.id;
   try {
@@ -579,6 +592,7 @@ document.addEventListener('click', async event => {
   } catch(error) { catchError(error); }
 });
 document.addEventListener('submit', async event => {
+  if(await phase3.handleSubmit(event))return;
   if(event.target.id==='inviteForm') {
     event.preventDefault();const form=event.target;
     const btn=form.querySelector('[type=submit]');btn.disabled=true;
