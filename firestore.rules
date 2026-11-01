@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function member() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid));
+    }
+    function validWorkspace(id) { return id == 'test' || id == 'official'; }
+    function validRoom() {
+      return request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 120
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 3000
+        && request.resource.data.status in ['not-started', 'in-progress', 'verified'];
+    }
+    function validItem() {
+      return request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 160
+        && request.resource.data.roomId is string
+        && request.resource.data.roomId.size() > 0
+        && request.resource.data.quantity is int
+        && request.resource.data.quantity >= 0
+        && request.resource.data.quantity <= 1000000
+        && request.resource.data.category is string
+        && request.resource.data.category.size() <= 100
+        && request.resource.data.condition is string
+        && request.resource.data.condition in ['Excellent','Good','Fair','Poor','Broken','Not assessed']
+        && request.resource.data.notes is string
+        && request.resource.data.notes.size() <= 5000;
+    }
+    // The allowlist is provisioned only by a Firebase project administrator.
+    match /authorizedUsers/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow list, create, update, delete: if false;
+    }
+    match /workspaces/{space}/rooms/{roomId} {
+      allow read: if member() && validWorkspace(space);
+      allow create, update: if member() && validWorkspace(space) && validRoom();
+      allow delete: if member() && space == 'test';
+    }
+    match /workspaces/{space}/items/{itemId} {
+      allow read: if member() && validWorkspace(space);
+      allow create, update: if member() && validWorkspace(space) && validItem();
+      allow delete: if member() && space == 'test';
+    }
+    match /{document=**} { allow read, write: if false; }
+  }
+}

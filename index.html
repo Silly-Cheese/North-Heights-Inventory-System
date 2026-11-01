@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#153e42">
+  <meta name="description" content="Private inventory management for North Heights Church of Christ">
+  <title>North Heights Inventory</title>
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./src/style.css">
+</head>
+<body>
+  <div id="splash" class="splash"><div class="brand-mark">NH</div><h1>North Heights Inventory</h1><p>Connecting securely...</p></div>
+  <section id="auth" class="auth-screen" hidden>
+    <div class="auth-card">
+      <div class="brand-mark">NH</div>
+      <div class="eyebrow">NORTH HEIGHTS CHURCH OF CHRIST</div>
+      <h1>Inventory Management</h1>
+      <p class="muted">A private workspace for documenting and organizing the congregation's property.</p>
+      <form id="loginForm" class="form-stack">
+        <label for="email">Email address</label>
+        <input id="email" name="email" type="email" autocomplete="username" placeholder="name@example.com" required>
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Your password" required>
+        <button class="btn primary full" type="submit">Sign in securely</button>
+        <p id="loginError" class="form-error" role="alert" aria-live="polite"></p>
+      </form>
+      <div class="auth-footer">Access is restricted to approved North Heights inventory members.</div>
+    </div>
+  </section>
+  <div id="app" hidden></div>
+  <dialog id="modal" class="dialog" aria-label="Edit inventory"></dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="./src/app.js"></script>
+</body>
+</html>
