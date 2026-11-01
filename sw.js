@@ -1,5 +1,5 @@
 // Versioned, public-static-app-shell cache. Private inventory and Firebase APIs are NEVER cached here.
-const CACHE='north-heights-app-v4-no-functions-20261101';
+const CACHE='north-heights-app-v4-formfix-20261101';
 const SHELL=['./','./index.html','./favicon.svg','./manifest.webmanifest',
   './src/style.css','./src/phase2.css','./src/phase3.css','./src/phase4.css',
   './src/app.js','./src/data-actions.js','./src/phase3.js','./src/phase4.js'];
@@ -22,7 +22,7 @@ self.addEventListener('fetch',event=>{
         if(fresh.ok)cache.put('./index.html',fresh.clone());
         return fresh;
       }catch{
-        return await cache.match('./index.html')||Response.error();
+        return await cache.match('./index.html') || await cache.match(new URL('./index.html',self.registration.scope).toString()) || new Response('<!doctype html><title>Offline</title><p>Reconnect and reload North Heights Inventory.</p>',{headers:{'Content-Type':'text/html'},status:503});
       }
     }
     const cached=await cache.match(req);

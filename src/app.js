@@ -674,6 +674,11 @@ document.addEventListener('click', async event => {
   } catch(error) { catchError(error); }
 });
 document.addEventListener('submit', async event => {
+  // Prevent browser GET navigation synchronously, before any await.
+  // Previously the first await let the form submit to ?id=&name=... and reset the SPA.
+  if(['roomForm','itemForm','inviteForm','p3ProposalForm','p3ReviewForm','p3SnapshotForm'].includes(event.target?.id)){
+    event.preventDefault();
+  }
   if(await phase3.handleSubmit(event))return;
   if(event.target.id==='inviteForm') {
     event.preventDefault();const form=event.target;
