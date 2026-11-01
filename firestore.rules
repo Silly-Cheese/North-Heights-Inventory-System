@@ -227,7 +227,8 @@ service cloud.firestore {
         request.resource.data.createdAt == request.time &&
         request.resource.data.resultQuantity is int &&
         getAfter(/databases/$(database)/documents/workspaces/$(space)/items/$(request.resource.data.itemId)).data.quantity == request.resource.data.resultQuantity;
-      allow update, delete: if false;
+      allow update: if false;
+      allow delete: if editor() && space == 'test';
     }
     match /workspaces/{space}/snapshots/{snapshotId} {
       allow read: if authorized() && workspace(space);

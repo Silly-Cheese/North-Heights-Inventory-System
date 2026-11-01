@@ -224,6 +224,10 @@ export function initDataActions({db,auth,storage,storageRef,deleteObject,state})
          updatedAt:serverTimestamp(),updatedBy:uid()});
      }
      tx.set(opDoc,{uid:uid(),space,itemId,delta,baseline,resultQuantity:next,createdAt:serverTimestamp()});
+     tx.set(doc(collection(db,'workspaces',space,'activity')),{recordType:'item',
+       recordId:itemId,operation:'quantity-adjusted',recordName:item.name,actorUid:uid(),
+       changedKeys:['quantity'],roomId:item.roomId,beforeQuantity:item.quantity,
+       afterQuantity:next,createdAt:serverTimestamp()});
      return {status:'applied',quantity:next,replayed:false};
    });
  }
