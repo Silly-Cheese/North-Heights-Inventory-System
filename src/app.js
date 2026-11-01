@@ -1,6 +1,7 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
 import { initPhase3 } from './phase3.js?v=20261101-forms3';
 import { bindRoomSaveForm } from './room-save.js?v=20261101-roomsave1';
+import { bindItemSaveForm } from './item-save.js?v=20261101-itemsave2';
 import { initPhase4 } from './phase4.js?v=20261101-forms3';
 import { query, orderBy, limit } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendEmailVerification, reload, getIdToken } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
@@ -14,7 +15,7 @@ const firebaseConfig = {
   messagingSenderId: '417386366102',
   appId: '1:417386366102:web:afe95a46e22670ea852eb7'
 };
-import { initDataActions } from './data-actions.js?v=20261101-forms3';
+import { initDataActions } from './data-actions.js?v=20261101-itemsave2';
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-storage.js';
 const firebase = initializeApp(firebaseConfig);
 const auth = getAuth(firebase);
@@ -501,7 +502,80 @@ function itemEditor(item=null, defaultRoom=null) {
     actionBtn('removePhoto','Remove photo',item.id,'btn sm danger')+'</div>':'')+
     '<div class="field full-span"><label>Photograph (optional)</label><input type="file" name="photo" accept="image/*" capture="environment">'+
     '<span class="small muted">Maximum 8 MB. A new photo replaces the previous one.</span></div>'+
-    '<p id="itemFormError" class="form-error full-span"></p><div class="modal-foot full-span"><button type="button" class="btn" data-action="closeModal">Cancel</button><button type="submit" class="btn primary">Save item</button></div></form>');
+    '<p id="itemFormError" class="form-error full-span" role="alert" aria-live="assertive"></p><div class="modal-foot full-span"><button type="button" class="btn" data-action="closeModal">Cancel</button><button type="button" data-item-save class="btn primary">Save item</button></div></form>');
+  const form=$('itemForm');
+  const originPage=state.page;
+  bindItemSaveForm(form,{
+    performSave:async fd=>{
+      if(!canEdit() || !state.user)throw new Error('Your account cannot edit inventory.');
+      const space=state.space;
+      const id=String(fd.get('id')||'');
+      const name=String(fd.get('name')||'').trim();
+      const roomId=String(fd.get('roomId')||'');
+      const quantity=Number(fd.get('quantity'));
+      const category=String(fd.get('category')||'Other').trim()||'Other';
+      const condition=String(fd.get('condition')||'Not assessed');
+      const notes=String(fd.get('notes')||'').trim();
+      const file=fd.get('photo');
+      if(!name || name.length>160)throw new Error('Enter an item name of up to 160 characters.');
+      if(!roomId || !activeRooms().some(r=>r.id===roomId))
+        throw new Error('Choose an active room. If it was just created, refresh the Rooms page and try again.');
+      if(!Number.isSafeInteger(quantity) || quantity<0 || quantity>1000000)
+        throw new Error('Enter a whole-number quantity from 0 to 1,000,000.');
+      if(category.length>100 || notes.length>5000 || !CONDITIONS.includes(condition))
+        throw new Error('Check category, condition, and notes for valid values.');
+      if(file && file.size && (
+        file.size>=8*1024*1024 ||
+        !['image/jpeg','image/png','image/webp','image/heic','image/heif'].includes(file.type)
+      ))throw new Error('Choose a JPEG, PNG, WebP, HEIC, or HEIF image smaller than 8 MB.');
+      const original=id?state.items.find(i=>i.id===id):null;
+      if(id && !original)throw new Error('The item was changed or removed. Refresh inventory and try again.');
+      const values={
+        name,roomId,quantity,category,condition,notes,
+        photoPath:original?.photoPath||'',photoUrl:original?.photoUrl||'',
+        updatedAt:serverTimestamp(),updatedBy:state.user.uid
+      };
+      // Save the inventory record before any optional photo upload.
+      // If a photo fails, the item still exists and must not be duplicated.
+      const reference=await actions.writeInventoryItem(space,original,values);
+      let photoWarning='';
+      if(file && file.size){
+        let newPath='';
+        try{
+          newPath='inventory/'+space+'/'+reference.id+'/'+Date.now()+'-'+
+            crypto.randomUUID()+'.'+(file.type.split('/')[1]||'jpg').replace(/[^a-z0-9]/gi,'');
+          const newRef=storageRef(storage,newPath);
+          await uploadBytes(newRef,file,{contentType:file.type});
+          const url=await getDownloadURL(newRef);
+          await updateDoc(reference,{photoPath:newPath,photoUrl:url,updatedBy:state.user.uid,updatedAt:serverTimestamp()});
+          if(original?.photoPath){
+            deleteObject(storageRef(storage,original.photoPath)).catch(error=>
+              console.warn('Old item photo cleanup failed:',error));
+          }
+        }catch(error){
+          console.error('Item saved, but photo upload failed:',error);
+          photoWarning=' The item was saved, but its photo could not be uploaded. Edit the item to retry.';
+        }
+      }
+      actions.logActivity(space,{recordType:'item',recordId:reference.id,
+        recordName:name,roomId,operation:original?'updated':'created',
+        changedKeys:['name','roomId','quantity']}).catch(error=>
+          console.warn('Item saved, but optional activity logging failed:',error));
+      return {id:reference.id,name,roomId,space,created:!id,photoWarning};
+    },
+    onSuccess:async result=>{
+      closeModal();
+      toast((result.created?'Item created: ':'Item updated: ')+result.name+result.photoWarning,!!result.photoWarning);
+      if(state.space===result.space){
+        if(originPage==='room')showPage('room',result.roomId);
+        else showPage('items');
+      }
+    },
+    onFailure:error=>{
+      if(error?.code==='permission-denied')
+        toast('Firestore blocked the item save. See the message inside the editor.',true);
+    }
+  });
 }
 function quickCount(item) {
   if(!canEdit())return;
@@ -737,37 +811,5 @@ document.addEventListener('submit', async event => {
       state.latestInvite=result.data.code;render();toast('One-time authorization code created.');
     }catch(error){catchError(error);}finally{btn.disabled=false;}return;
   }
-  if (event.target.id !== 'itemForm') return;
-  event.preventDefault();
-  if(!canEdit()){toast('Read-only account.',true);return;}
-  const form=event.target; const fd=new FormData(form);
-  const button=form.querySelector('[type="submit"]'); button.disabled=true;
-  try {
-    if(form.id==='itemForm') {
-      const id=String(fd.get('id')||''), quantity=Number(fd.get('quantity')), name=String(fd.get('name')||'').trim(), roomId=String(fd.get('roomId')||'');
-      if(!name || !roomId || !Number.isInteger(quantity) || quantity<0 || quantity>1000000) throw new Error('Enter an item name, valid room, and whole-number quantity (0 to 1,000,000).');
-      if(!activeRooms().some(r=>r.id===roomId)) throw new Error('Select an existing active room.');
-      const old=id?state.items.find(i=>i.id===id):null;
-      const values={name,roomId,quantity,category:String(fd.get('category')||'Other').trim()||'Other',
-        condition:String(fd.get('condition')||'Not assessed'),notes:String(fd.get('notes')||'').trim(),
-        photoPath:old?.photoPath||'',photoUrl:old?.photoUrl||'',updatedAt:serverTimestamp(),updatedBy:state.user.uid};
-      let ref;
-      ref=await actions.writeInventoryItem(state.space,old,values);
-      const photo=fd.get('photo');
-      if(photo instanceof File && photo.size){
-        if(photo.size>=8*1024*1024 || !['image/jpeg','image/png','image/webp','image/heic','image/heif'].includes(photo.type))throw new Error('Choose a JPEG, PNG, WebP or HEIC image smaller than 8 MB.');
-        const path='inventory/'+state.space+'/'+ref.id+'/'+Date.now()+'-'+Math.random().toString(36).slice(2)+'.'+(photo.type.split('/')[1]||'jpg').replace(/[^a-z0-9]/gi,'');
-        const photoRef=storageRef(storage,path);
-        await uploadBytes(photoRef,photo,{contentType:photo.type});
-        const url=await getDownloadURL(photoRef);
-        await updateDoc(ref,{photoPath:path,photoUrl:url,updatedBy:state.user.uid,updatedAt:serverTimestamp()});
-        if(old?.photoPath)deleteObject(storageRef(storage,old.photoPath)).catch(err=>console.warn('Previous photo cleanup:',err));
-      }
-      actions.logActivity(state.space,{recordType:'item',recordId:ref.id,recordName:name,roomId,operation:old?'updated':'created',changedKeys:['name','quantity']}).catch(console.warn);
-      closeModal();toast('Item saved.');
-    }
-  } catch(error) {
-    console.error('Inventory item save failed:',error);
-    const err=$('itemFormError'); if(err) err.textContent=errMessage(error);
-  } finally { button.disabled=false; }
+
 });

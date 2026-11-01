@@ -233,7 +233,32 @@ export function initDataActions({db,auth,storage,storageRef,deleteObject,state})
  }
  async function writeInventoryItem(space,old,values) {
    requireEditor();
+   if(!['test','official'].includes(space))throw Error('Invalid workspace.');
    const reference=old?resource(space,'items',old.id):doc(collection(db,'workspaces',space,'items'));
+   // New items use a straightforward Firestore write. Previously ALL items used
+   // a multi-document transaction even when no related data needed updating.
+   // Keeping ordinary creates simple also makes failures easier to identify.
+   if(!old){
+     const roomRef=resource(space,'rooms',values.roomId);
+     const roomSnapshot=await getDoc(roomRef);
+     if(!roomSnapshot.exists() || roomSnapshot.data().deletedAt)
+       throw Error('The selected room is unavailable. Refresh Rooms and try again.');
+     const record={...values,createdAt:serverTimestamp(),createdBy:uid(),
+       deletedAt:null,deletedWithRoom:false};
+     if(roomSnapshot.data().status==='verified'){
+       // Changes to a verified room must reopen its review. Commit together so
+       // Firestore rules can validate the post-write room status with getAfter().
+       const batch=writeBatch(db);
+       batch.update(roomRef,{status:'in-progress',verifiedBy:'',verifiedAt:null,
+         reviewNote:'Inventory item added after verification; recheck required.',
+         updatedAt:serverTimestamp(),updatedBy:uid()});
+       batch.set(reference,record);
+       await batch.commit();
+     }else{
+       await setDoc(reference,record);
+     }
+     return reference;
+   }
    const previousRoomId=old?.roomId;
    const targetRoomId=values.roomId;
    await runTransaction(db,async tx=>{
