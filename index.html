@@ -10,6 +10,8 @@
   <link rel="stylesheet" href="./src/style.css">
   <link rel="stylesheet" href="./src/phase2.css">
   <link rel="stylesheet" href="./src/phase3.css">
+  <link rel="stylesheet" href="./src/phase4.css">
+  <link rel="manifest" href="./manifest.webmanifest">
 </head>
 <body>
   <div id="splash" class="splash"><div class="brand-mark">NH</div><h1>North Heights Inventory</h1><p>Connecting securely...</p></div>
@@ -46,18 +48,17 @@
         <p id="registerError" class="form-error" role="alert" aria-live="polite"></p>
       </form>
       <form id="bootstrapForm" class="form-stack" hidden>
-        <p class="small muted">First-time owner setup only. Use the private bootstrap secret configured in Firebase Functions. This creates your Authentication account and owner authorization document automatically.</p>
+        <p class="small muted">First-time owner setup. Your email must match the owner email configured in Firestore Rules. Verify your email when prompted, then submit again. This creates your authorization document automatically, without Cloud Functions.</p>
         <label for="ownerName">Owner full name</label>
         <input id="ownerName" name="displayName" minlength="2" maxlength="80" autocomplete="name" required>
         <label for="ownerEmail">Owner email address</label>
         <input id="ownerEmail" name="email" type="email" autocomplete="email" required>
         <label for="ownerPassword">Choose password</label>
         <input id="ownerPassword" name="password" type="password" minlength="6" autocomplete="new-password" required>
-        <label for="bootstrapCode">Private bootstrap secret</label>
-        <input id="bootstrapCode" name="bootstrapCode" type="password" autocomplete="off" required>
         <button class="btn primary full" type="submit">Initialize owner account</button>
         <p id="bootstrapError" class="form-error" role="alert" aria-live="polite"></p>
       </form>
+      <button type="button" id="switchAccount" class="btn full" style="margin-top:12px">Use a different account / Sign out</button>
       <div class="auth-footer">Access is restricted to approved North Heights inventory members.</div>
     </div>
   </section>
@@ -65,5 +66,10 @@
   <dialog id="modal" class="dialog" aria-label="Edit inventory"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script type="module" src="./src/app.js"></script>
+  <script>
+    if('serviceWorker' in navigator)window.addEventListener('load',()=>{
+      navigator.serviceWorker.register('./sw.js').catch(error=>console.warn('App shell cache unavailable:',error));
+    });
+  </script>
 </body>
 </html>

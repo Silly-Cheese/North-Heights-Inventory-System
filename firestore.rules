@@ -2,109 +2,249 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function authorized() {
-      return signedIn() &&
-        exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)).data.active == true;
-    }
-    function role() {
-      return get(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)).data.role;
-    }
+    function verified() { return signedIn() && request.auth.token.email_verified == true; }
+    // Run scripts/configure-owner.ps1 BEFORE deploying. No open first-user-wins bootstrap.
+    function ownerEmail() { return '__OWNER_EMAIL__'; }
+    function ownerEligible() { return verified() && request.auth.token.email == ownerEmail(); }
+    function userDoc(uid) { return /databases/$(database)/documents/authorizedUsers/$(uid); }
+    function inviteDoc(id) { return /databases/$(database)/documents/invites/$(id); }
+    function setupDoc() { return /databases/$(database)/documents/system/bootstrap; }
+    function memberExists() { return signedIn() && exists(userDoc(request.auth.uid)); }
+    function authorized() { return memberExists() && get(userDoc(request.auth.uid)).data.active == true && verified(); }
+    function role() { return get(userDoc(request.auth.uid)).data.role; }
     function editor() { return authorized() && role() in ['owner','inventory']; }
     function owner() { return authorized() && role() == 'owner'; }
     function workspace(space) { return space in ['test','official']; }
+    function identityValid(uid) {
+      return verified() && request.auth.uid == uid &&
+        request.resource.data.keys().hasOnly(['uid','email','displayName','role','active','createdAt','invitedBy','inviteId']) &&
+        request.resource.data.keys().hasAll(['uid','email','displayName','role','active','createdAt','invitedBy','inviteId']) &&
+        request.resource.data.uid == uid && request.resource.data.email == request.auth.token.email &&
+        request.resource.data.displayName is string && request.resource.data.displayName.size() >= 2 &&
+        request.resource.data.displayName.size() <= 80 &&
+        request.resource.data.active == true && request.resource.data.createdAt == request.time;
+    }
+    function inviteUsable(id) {
+      return exists(inviteDoc(id)) &&
+        get(inviteDoc(id)).data.revoked == false &&
+        get(inviteDoc(id)).data.redeemedBy == '' &&
+        get(inviteDoc(id)).data.expiresAt > request.time &&
+        (get(inviteDoc(id)).data.email == '' ||
+         get(inviteDoc(id)).data.email == request.auth.token.email);
+    }
     function validRoom() {
       return request.resource.data.keys().hasOnly(['name','description','status','assignedTo','reviewNote','submittedBy','submittedAt','verifiedBy','verifiedAt','createdAt','createdBy','updatedAt','updatedBy','deletedAt']) &&
         request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120 &&
         request.resource.data.description is string && request.resource.data.description.size() <= 3000 &&
         request.resource.data.status in ['not-started','in-progress','ready-for-review','verified'] &&
-        request.resource.data.get('reviewNote','') is string && request.resource.data.get('reviewNote','').size() <= 2000 &&
-        request.resource.data.get('assignedTo','') is string && request.resource.data.get('assignedTo','').size() <= 128 &&
-        request.resource.data.get('submittedBy','') is string && request.resource.data.get('submittedBy','').size() <= 128 &&
-        request.resource.data.get('verifiedBy','') is string && request.resource.data.get('verifiedBy','').size() <= 128;
+        request.resource.data.get('reviewNote','') is string &&
+        request.resource.data.get('assignedTo','') is string &&
+        request.resource.data.get('submittedBy','') is string &&
+        request.resource.data.get('verifiedBy','') is string;
     }
     function validItem() {
       return request.resource.data.keys().hasOnly(['name','roomId','quantity','category','condition','notes','photoPath','photoUrl','createdAt','createdBy','updatedAt','updatedBy','deletedAt','deletedWithRoom']) &&
-        request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 160 &&
-        request.resource.data.roomId is string && request.resource.data.roomId.size() > 0 &&
-        request.resource.data.quantity is int && request.resource.data.quantity >= 0 && request.resource.data.quantity <= 1000000 &&
-        request.resource.data.category is string && request.resource.data.category.size() <= 100 &&
+        request.resource.data.name is string && request.resource.data.name.size()>0 && request.resource.data.name.size()<=160 &&
+        request.resource.data.roomId is string && request.resource.data.roomId.size()>0 &&
+        request.resource.data.quantity is int && request.resource.data.quantity>=0 && request.resource.data.quantity<=1000000 &&
+        request.resource.data.category is string && request.resource.data.category.size()<=100 &&
         request.resource.data.condition in ['Excellent','Good','Fair','Poor','Broken','Not assessed'] &&
-        request.resource.data.notes is string && request.resource.data.notes.size() <= 5000 &&
-        request.resource.data.get('photoPath','') is string && request.resource.data.get('photoPath','').size() <= 500 &&
-        request.resource.data.get('photoUrl','') is string && request.resource.data.get('photoUrl','').size() <= 3000;
+        request.resource.data.notes is string && request.resource.data.notes.size()<=5000 &&
+        request.resource.data.get('photoPath','') is string &&
+        request.resource.data.get('photoUrl','') is string;
     }
-    function createdByUser() {
-      return request.resource.data.createdBy == request.auth.uid &&
-        request.resource.data.updatedBy == request.auth.uid;
+    function ownerFields() {
+      return request.resource.data.role == 'owner' &&
+        request.resource.data.invitedBy == '' && request.resource.data.inviteId == '' &&
+        ownerEligible() && !exists(setupDoc()) &&
+        getAfter(setupDoc()).data.ownerUid == request.auth.uid;
+    }
+    function invitedFields(uid) {
+      return request.resource.data.role in ['inventory','member'] &&
+        request.resource.data.inviteId is string &&
+        request.resource.data.inviteId.size() == 64 &&
+        inviteUsable(request.resource.data.inviteId) &&
+        get(inviteDoc(request.resource.data.inviteId)).data.role == request.resource.data.role &&
+        request.resource.data.invitedBy == get(inviteDoc(request.resource.data.inviteId)).data.createdBy &&
+        getAfter(inviteDoc(request.resource.data.inviteId)).data.redeemedBy == uid;
+    }
+
+    match /system/bootstrap {
+      allow get: if true;
+      allow list: if false;
+      allow create: if ownerEligible() && !exists(setupDoc()) &&
+        request.resource.data.keys().hasOnly(['ownerUid','createdAt']) &&
+        request.resource.data.ownerUid == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        getAfter(userDoc(request.auth.uid)).data.role == 'owner' &&
+        getAfter(userDoc(request.auth.uid)).data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+    match /authorizedUsers/{uid} {
+      allow get: if authorized() && (request.auth.uid == uid || editor());
+      allow list: if editor();
+      allow create: if identityValid(uid) && (ownerFields() || invitedFields(uid));
+      allow update: if owner() && uid != request.auth.uid &&
+        resource.data.role != 'owner' &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active','disabledAt','disabledBy']) &&
+        request.resource.data.active == false &&
+        request.resource.data.disabledBy == request.auth.uid;
+      allow delete: if false;
+    }
+    match /invites/{inviteId} {
+      // Exact 256-bit code hash is unguessable; no collection listing for invitees.
+      allow get: if verified();
+      allow list: if owner();
+      allow create: if owner() &&
+        inviteId.size() == 64 &&
+        request.resource.data.keys().hasOnly(['role','email','createdBy','createdAt','expiresAt','redeemedBy','redeemedAt','revoked']) &&
+        request.resource.data.role in ['inventory','member'] &&
+        request.resource.data.email is string &&
+        request.resource.data.email.size() <= 254 &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.expiresAt > request.time &&
+        request.resource.data.expiresAt <= request.time + duration.value(7,'d') &&
+        request.resource.data.redeemedBy == '' &&
+        request.resource.data.redeemedAt == null &&
+        request.resource.data.revoked == false;
+      allow update: if
+        (owner() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['revoked']) &&
+         request.resource.data.revoked == true) ||
+        (verified() && resource.data.revoked == false && resource.data.redeemedBy == '' &&
+         resource.data.expiresAt > request.time &&
+         (resource.data.email == '' || resource.data.email == request.auth.token.email) &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['redeemedBy','redeemedAt']) &&
+         request.resource.data.redeemedBy == request.auth.uid &&
+         request.resource.data.redeemedAt == request.time &&
+         getAfter(userDoc(request.auth.uid)).data.inviteId == inviteId &&
+         getAfter(userDoc(request.auth.uid)).data.role == resource.data.role &&
+         !exists(userDoc(request.auth.uid)));
+      allow delete: if false;
     }
     function updatedByUser() {
       return request.resource.data.updatedBy == request.auth.uid &&
         request.resource.data.createdBy == resource.data.createdBy &&
         request.resource.data.createdAt == resource.data.createdAt;
     }
-    function verifyAllowed(space) {
-      return (
-        request.resource.data.status != 'verified' ||
+    function validRoomReview(space) {
+      return (request.resource.data.status != 'verified' ||
         (resource.data.status == 'verified' &&
-          request.resource.data.verifiedBy == resource.data.verifiedBy &&
-          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['assignedTo','updatedAt','updatedBy'])) ||
+         request.resource.data.verifiedBy == resource.data.verifiedBy &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['assignedTo','updatedAt','updatedBy'])) ||
         (resource.data.status == 'ready-for-review' &&
-          request.resource.data.verifiedBy == request.auth.uid &&
-          request.resource.data.submittedBy == resource.data.submittedBy &&
-          (space == 'test' || resource.data.submittedBy != request.auth.uid))
-      ) && (
-        request.resource.data.status != 'ready-for-review' ||
-        (resource.data.status != 'ready-for-review' &&
+         request.resource.data.verifiedBy == request.auth.uid &&
+         request.resource.data.submittedBy == resource.data.submittedBy &&
+         (space == 'test' || resource.data.submittedBy != request.auth.uid)))
+       && (request.resource.data.status != 'ready-for-review' ||
+         (resource.data.status != 'ready-for-review' &&
           request.resource.data.submittedBy == request.auth.uid) ||
-        (resource.data.status == 'ready-for-review' &&
-          request.resource.data.submittedBy == resource.data.submittedBy)
-      );
-    }
-    match /authorizedUsers/{uid} {
-      allow get: if authorized() && (request.auth.uid == uid || editor());
-      allow list: if editor();
-      allow create, update, delete: if false;
-    }
-    match /invites/{inviteId} {
-      allow read: if owner();
-      allow write: if false;
+         (resource.data.status == 'ready-for-review' &&
+          request.resource.data.submittedBy == resource.data.submittedBy));
     }
     match /workspaces/{space}/rooms/{roomId} {
       allow read: if authorized() && workspace(space);
-      allow create: if editor() && workspace(space) && validRoom() && createdByUser() &&
-        request.resource.data.status in ['not-started','in-progress'] &&
-        request.resource.data.get('submittedBy','') == '' &&
-        request.resource.data.get('verifiedBy','') == '';
-      allow update: if editor() && workspace(space) && validRoom() && updatedByUser() && verifyAllowed(space);
+      allow create: if editor() && workspace(space) && validRoom() &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.updatedBy == request.auth.uid &&
+        request.resource.data.status in ['not-started','in-progress'];
+      allow update: if editor() && workspace(space) && validRoom() &&
+        updatedByUser() && validRoomReview(space);
       allow delete: if editor() && space == 'test';
+    }
+    function canChangeItemInRoom(space, roomId) {
+      return exists(/databases/$(database)/documents/workspaces/$(space)/rooms/$(roomId)) &&
+        getAfter(/databases/$(database)/documents/workspaces/$(space)/rooms/$(roomId)).data.status != 'verified';
     }
     match /workspaces/{space}/items/{itemId} {
       allow read: if authorized() && workspace(space);
-      allow create: if editor() && workspace(space) && validItem() && createdByUser()
-        && exists(/databases/$(database)/documents/workspaces/$(space)/rooms/$(request.resource.data.roomId));
-      allow update: if editor() && workspace(space) && validItem() && updatedByUser();
+      allow create: if editor() && workspace(space) && validItem() &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.updatedBy == request.auth.uid &&
+        canChangeItemInRoom(space,request.resource.data.roomId);
+      allow update: if editor() && workspace(space) && validItem() &&
+        updatedByUser() &&
+        ((canChangeItemInRoom(space,request.resource.data.roomId) &&
+          canChangeItemInRoom(space,resource.data.roomId)) ||
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['photoPath','photoUrl','notes','updatedAt','updatedBy'])) &&
+        (!exists(/databases/$(database)/documents/workspaces/$(space)/dispositions/$(itemId)) ||
+          get(/databases/$(database)/documents/workspaces/$(space)/dispositions/$(itemId)).data.status != 'approved' ||
+          getAfter(/databases/$(database)/documents/workspaces/$(space)/dispositions/$(itemId)).data.status == 'needs-review' ||
+          // A change restricted to photograph/notes/updatedAt must not force disposition reapproval.
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['photoPath','photoUrl','notes','updatedAt','updatedBy']));
       allow delete: if editor() && space == 'test';
     }
     match /workspaces/{space}/activity/{eventId} {
       allow read: if authorized() && workspace(space);
-      allow write: if false;
+      allow create: if editor() && workspace(space) &&
+        request.resource.data.actorUid == request.auth.uid &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.keys().hasOnly(['recordType','recordId','operation','recordName','actorUid','changedKeys','roomId','createdAt','beforeQuantity','afterQuantity']);
+      allow update: if false;
+      allow delete: if editor() && space == 'test';
     }
-    // Phase 3 decisions and frozen snapshots are written exclusively by the Admin SDK.
+    function validAllocations(data) {
+      return data.allocations is list && data.allocations.size() == 5 &&
+        data.allocations[0].type == 'retain' &&
+        data.allocations[1].type == 'include-with-property' &&
+        data.allocations[2].type == 'donate' &&
+        data.allocations[3].type == 'sell-separately' &&
+        data.allocations[4].type == 'dispose' &&
+        data.allocations[0].quantity is int && data.allocations[0].quantity >= 0 &&
+        data.allocations[1].quantity is int && data.allocations[1].quantity >= 0 &&
+        data.allocations[2].quantity is int && data.allocations[2].quantity >= 0 &&
+        data.allocations[3].quantity is int && data.allocations[3].quantity >= 0 &&
+        data.allocations[4].quantity is int && data.allocations[4].quantity >= 0;
+    }
     match /workspaces/{space}/dispositions/{itemId} {
       allow read: if authorized() && workspace(space);
-      allow write: if false;
+      allow create: if editor() && workspace(space) && validAllocations(request.resource.data) &&
+        request.resource.data.status == 'proposed' &&
+        request.resource.data.submittedBy == request.auth.uid;
+      allow update: if editor() && workspace(space) && validAllocations(request.resource.data) &&
+        ((request.resource.data.status == 'proposed' &&
+          request.resource.data.submittedBy == request.auth.uid) ||
+         (owner() && resource.data.status == 'proposed' &&
+          request.resource.data.status in ['approved','rejected'] &&
+          request.resource.data.reviewedBy == request.auth.uid) ||
+         (resource.data.status == 'approved' && request.resource.data.status == 'needs-review' &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','updatedAt','updatedBy','reviewNote'])));
+      allow delete: if editor() && space == 'test';
     }
     match /workspaces/{space}/dispositionEvents/{eventId} {
       allow read: if authorized() && workspace(space);
-      allow write: if false;
+      allow create: if editor() && workspace(space) &&
+        request.resource.data.actorUid == request.auth.uid &&
+        request.resource.data.createdAt == request.time;
+      allow update: if false;
+      allow delete: if editor() && space == 'test';
+    }
+    match /workspaces/{space}/countOperations/{operationId} {
+      allow read: if authorized() && workspace(space);
+      allow create: if editor() && workspace(space) &&
+        request.resource.data.uid == request.auth.uid &&
+        request.resource.data.space == space &&
+        request.resource.data.createdAt == request.time &&
+        request.resource.data.resultQuantity is int &&
+        getAfter(/databases/$(database)/documents/workspaces/$(space)/items/$(request.resource.data.itemId)).data.quantity == request.resource.data.resultQuantity;
+      allow update, delete: if false;
     }
     match /workspaces/{space}/snapshots/{snapshotId} {
       allow read: if authorized() && workspace(space);
-      allow write: if false;
+      allow create: if workspace(space) && (owner() || (space == 'test' && editor())) &&
+        request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.status == 'building';
+      allow update: if workspace(space) && (owner() || (space == 'test' && editor())) &&
+        resource.data.status == 'building' &&
+        request.resource.data.status in ['complete','failed'] &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status','completedAt','failedAt']);
+      allow delete: if space == 'test' && editor();
       match /entries/{entryId} {
         allow read: if authorized() && workspace(space);
-        allow write: if false;
+        allow create: if workspace(space) && (owner() || (space == 'test' && editor())) &&
+          get(/databases/$(database)/documents/workspaces/$(space)/snapshots/$(snapshotId)).data.status == 'building';
+        allow update: if false;
+        allow delete: if space == 'test' && editor();
       }
     }
     match /{document=**} { allow read, write: if false; }

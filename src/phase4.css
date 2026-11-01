@@ -1,0 +1,44 @@
+/* Phase 4 mobile polish, quick-count sync and QR room labels */
+#p4Status{white-space:nowrap;font-size:.76rem;border-color:#cae3d5;background:#edf6f0;color:#205a4b}
+.p4-pending-note{font-size:.69rem;font-weight:800;color:#a76616;margin-top:5px}
+.p4-loadmore{text-align:center;color:#697e76;font-size:.8rem;display:flex;justify-content:center;align-items:center;gap:12px}
+.p4-sync-row{align-items:start}
+.p4-sync-row p{line-height:1.55;max-width:700px}
+.p4-sync-row .inline-actions{justify-content:end}
+.p4-qr{padding:13px;min-height:255px;display:grid;place-items:center;background:white;border:1px solid #dce8de;border-radius:14px;margin:13px 0}
+.p4-qr img{max-width:100%;height:auto;image-rendering:pixelated}
+.p4-label{text-align:center}
+.p4-label h2{font-size:1.5rem;margin:10px 0;color:#153e42}
+.p4-label strong{font-size:.86rem;letter-spacing:.035em}
+.p4-shortlink{font-size:.72rem;overflow-wrap:anywhere;color:#456b61}
+#p4PrintRoot{display:none}
+@media(max-width:760px){
+  .mobile-nav{grid-template-columns:repeat(5,minmax(0,1fr))}
+  .mobile-tab{font-size:.65rem;min-height:50px}
+  .topbar{gap:7px;padding:13px 12px}
+  .view-mode{gap:5px}
+  .view-mode #p4Status{font-size:.67rem;padding:7px 9px}
+  .mode-select{max-width:128px;font-size:.7rem;padding:8px 7px}
+  .p4-sync-row{flex-direction:column}
+  .p4-sync-row .inline-actions{justify-content:start}
+  .item-table td,.item-table th{padding:10px 8px}
+  .page-head .btn-row{width:100%}
+}
+@media print{
+  body:has(#p4PrintRoot) #app,body:has(#p4PrintRoot) #auth,body:has(#p4PrintRoot) #splash,
+  body:has(#p4PrintRoot) dialog{display:none!important}
+  #p4PrintRoot{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:13mm}
+  .p4-print-label{display:flex;flex-direction:column;align-items:center;justify-content:center;
+    text-align:center;break-inside:avoid;min-height:90mm;border:1px solid #ccc;padding:7mm}
+  .p4-print-label h2{font:bold 16pt Georgia,serif;margin:6pt 0}
+  .p4-print-label img{width:45mm;height:45mm}
+  .p4-print-label p{font:10pt Arial;margin:4pt 0}
+  .p4-print-label small{font:6pt Arial;overflow-wrap:anywhere}
+  body:has(dialog[open] #p4QrHolder):not(:has(#p4PrintRoot)) #app,
+  body:has(dialog[open] #p4QrHolder):not(:has(#p4PrintRoot)) #auth{display:none!important}
+  body:has(dialog[open] #p4QrHolder):not(:has(#p4PrintRoot)) dialog[open]{
+    display:block!important;position:static;box-shadow:none;border:0;width:100%;max-height:none
+  }
+  body:has(dialog[open] #p4QrHolder):not(:has(#p4PrintRoot)) dialog .modal-head,
+  body:has(dialog[open] #p4QrHolder):not(:has(#p4PrintRoot)) dialog .modal-foot{display:none!important}
+}

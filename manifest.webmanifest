@@ -1,0 +1,19 @@
+{
+  "id": "./",
+  "name": "North Heights Church of Christ — Inventory",
+  "short_name": "NH Inventory",
+  "description": "Private church property inventory and room counting",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f6f4",
+  "theme_color": "#153e42",
+  "icons": [
+    {
+      "src": "./favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
