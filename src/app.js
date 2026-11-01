@@ -1,6 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
-import { initPhase3 } from './phase3.js';
-import { initPhase4 } from './phase4.js';
+import { initPhase3 } from './phase3.js?v=20261101-forms3';
+import { initPhase4 } from './phase4.js?v=20261101-forms3';
 import { query, orderBy, limit } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js';
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, sendEmailVerification, reload, getIdToken } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
 import { getFirestore, collection, doc, getDoc, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp, increment, runTransaction } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js';
@@ -13,7 +13,7 @@ const firebaseConfig = {
   messagingSenderId: '417386366102',
   appId: '1:417386366102:web:afe95a46e22670ea852eb7'
 };
-import { initDataActions } from './data-actions.js';
+import { initDataActions } from './data-actions.js?v=20261101-forms3';
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-storage.js';
 const firebase = initializeApp(firebaseConfig);
 const auth = getAuth(firebase);
@@ -85,6 +85,7 @@ function showPage(page,roomId=null) {
   const url=new URL(window.location.href);
   if(page==='room' && roomId){url.searchParams.set('room',roomId);url.searchParams.set('space',state.space);}
   else{url.searchParams.delete('room');url.searchParams.set('space',state.space);}
+  url.searchParams.forEach((value,key)=>{if(!['space','room'].includes(key))url.searchParams.delete(key);});
   window.history.replaceState(null,'',url);
   render();
   window.scrollTo({ top:0, behavior:'instant' });
@@ -424,7 +425,7 @@ function roomEditor(room=null) {
   if(!canEdit())return toast('Your account has read-only access.',true);
   const users=state.members.filter(u=>['owner','inventory'].includes(u.role));
   openModal(modalHeading(room?'Edit room':'Create room')+
-    '<form id="roomForm" class="form-stack"><input type="hidden" name="id" value="'+E(room?.id||'')+'">'+
+    '<form id="roomForm" method="dialog" class="form-stack"><input type="hidden" name="id" value="'+E(room?.id||'')+'">'+
     '<div class="field"><label>Room name *</label><input name="name" maxlength="120" required autofocus placeholder="e.g. Auditorium" value="'+E(room?.name||'')+'"></div>'+
     '<div class="field"><label>Description (optional)</label><textarea name="description" maxlength="3000">'+E(room?.description||'')+'</textarea></div>'+
     '<div class="field"><label>Assigned inventory worker</label><select name="assignedTo"><option value="">Unassigned</option>'+
@@ -442,7 +443,7 @@ function itemEditor(item=null, defaultRoom=null) {
   const selected=item?.roomId||defaultRoom||rooms[0].id;
   const categories=[...new Set([...CATEGORIES,...state.items.map(i=>i.category).filter(Boolean)])].sort();
   openModal(modalHeading(item?'Edit item':'Add inventory item')+
-    '<form id="itemForm" class="form-grid"><input type="hidden" name="id" value="'+E(item?.id||'')+'">'+
+    '<form id="itemForm" method="dialog" class="form-grid"><input type="hidden" name="id" value="'+E(item?.id||'')+'">'+
     '<div class="field full-span"><label>Item name *</label><input name="name" maxlength="160" required autofocus placeholder="e.g. Folding Chairs" value="'+E(item?.name||'')+'"></div>'+
     '<div class="field"><label>Room *</label><select name="roomId" required>'+rooms.map(r=>'<option value="'+E(r.id)+'" '+(r.id===selected?'selected':'')+'>'+E(r.name)+'</option>').join('')+'</select></div>'+
     '<div class="field"><label>Quantity *</label><input name="quantity" type="number" required min="0" max="1000000" step="1" value="'+E(item?.quantity??1)+'"></div>'+

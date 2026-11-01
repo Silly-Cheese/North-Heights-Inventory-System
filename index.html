@@ -65,11 +65,36 @@
   <div id="app" hidden></div>
   <dialog id="modal" class="dialog" aria-label="Edit inventory"></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <script type="module" src="./src/app.js"></script>
   <script>
-    if('serviceWorker' in navigator)window.addEventListener('load',()=>{
-      navigator.serviceWorker.register('./sw.js').catch(error=>console.warn('App shell cache unavailable:',error));
-    });
+    // Old room-form GET submissions left item names and notes in the address bar.
+    // Keep only intentional QR-link parameters, preserving the current workspace.
+    (() => {
+      const url=new URL(location.href);
+      const safe=new URLSearchParams();
+      if(['test','official'].includes(url.searchParams.get('space')))safe.set('space',url.searchParams.get('space'));
+      if(/^[a-zA-Z0-9_-]{8,150}$/.test(url.searchParams.get('room')||''))safe.set('room',url.searchParams.get('room'));
+      if(url.search!== (safe.toString()?'?'+safe.toString():'')){
+        history.replaceState(history.state,'',url.pathname+(safe.toString()?'?'+safe.toString():'')+url.hash);
+      }
+    })();
+    // Synchronous, capture-phase protection: a dynamically generated inventory
+    // form must never navigate the public GitHub Pages URL on submit.
+    document.addEventListener('submit',event=>{
+      if(['roomForm','itemForm','inviteForm','p3ProposalForm','p3ReviewForm','p3SnapshotForm'].includes(event.target.id)){
+        event.preventDefault();
+      }
+    },true);
+    // Retire earlier cache-first workers. Do NOT clear IndexedDB: it holds pending counts.
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.getRegistrations().then(registrations=>
+        Promise.all(registrations.filter(r=>r.scope.startsWith(new URL('./',location.href).href))
+          .map(r=>r.unregister()))
+      ).catch(console.warn);
+      if('caches' in window)caches.keys().then(keys=>
+        Promise.all(keys.filter(k=>k.startsWith('north-heights-app-')).map(k=>caches.delete(k)))
+      ).catch(console.warn);
+    }
   </script>
+  <script type="module" src="./src/app.js?v=20261101-forms3"></script>
 </body>
 </html>
