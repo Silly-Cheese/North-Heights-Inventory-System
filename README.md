@@ -1,34 +1,89 @@
 # North Heights Church of Christ — Inventory Management System
 
-A private, mobile-friendly inventory application for North Heights Church of Christ.
+A private, mobile-friendly inventory application for North Heights Church of Christ, hosted on GitHub Pages with Firebase authentication, Firestore, Cloud Functions, and Storage.
 
-**Hosting:** GitHub Pages. **Backend:** Firebase Authentication and Cloud Firestore.
+## Phase 2
 
-## Initial setup
-1. In Firebase Console, enable **Authentication > Sign-in method > Email/Password**. Create the two authorized accounts under **Authentication > Users** (do not enable public sign-up).
-2. In **Firestore Database**, create the database and publish the rules in `firestore.rules`. Rules must be applied before the app can be used.
-3. For each approved Firebase Authentication user, create a Firestore document `authorizedUsers/<USER_UID>` with fields `displayName` (string) and `role` (string: `admin` or `member`). Make one admin and the other member. Both can inventory and delete records.
-4. In Firebase Authentication > Settings > Authorized domains, add `silly-cheese.github.io` if not already listed.
-5. In this repository, choose **Settings > Pages > Build and deployment > Deploy from a branch**, select **main** and **/(root)**, then save.
-6. The eventual URL will be https://silly-cheese.github.io/North-Heights-Inventory-System/ (after Pages publishes).
+- Self-service registration with one-time authorization codes.
+- Three roles: **owner** (full access + invitations), **inventory** (count/create/edit/delete/review), and **member** (read-only).
+- **Owner bootstrap** creates both a Firebase Authentication user **and** its `authorizedUsers/{uid}` Firestore document. No manual user/document creation is necessary.
+- Authorization codes are generated server-side, stored only as SHA-256 hashes, single-use, and expire after 7 days. Codes can optionally be tied to a specified email address.
+- Room assignments, Quick Count (+/- 1, 5, 10), item photographs, independent room verification, live updates, and server-recorded activity.
+- Separate Test / Official data namespaces. Test records can be permanently reset; official deletes go to recoverable Trash.
+- CSV inventory export and printable views.
 
-## Test vs official inventory
-The app has two independent Firestore workspaces: `workspaces/test/` and `workspaces/official/`. The testing workspace permits permanent deletion and a reset button. The official workspace uses a recoverable Trash. Sample records exist **only** if you choose to generate them in Test mode.
+**Important:** Phase 2 requires deployment of Firestore Rules, Cloud Storage Rules **and Cloud Functions**. Pushing GitHub Pages only updates the website; it does not deploy the Firebase backend.
 
-These are separate **data namespaces inside one Firebase project**, not separate Firebase staging/production projects. If stricter infrastructure isolation becomes necessary, create a second Firebase project for staging.
+## Getting started
 
-## Access control and configuration
-- The Firebase web configuration in `src/app.js` is a public browser configuration, **not** a substitute for database access rules. Do not commit service-account keys or other secrets.
-- Only accounts whose UID is listed in Firestore's `authorizedUsers` collection may read or write rooms/items.
-- GitHub Pages is public static hosting; never place private inventory information into the repository itself.
-- Firebase Authentication authorized domains and Firestore rules must be configured manually in Firebase Console.
-- For PowerShell CLI rule deployment: `npm.cmd install -g firebase-tools`, then `firebase.cmd login` and `firebase.cmd deploy --only firestore:rules --project nh-inventory-6f359`.
+See **[Phase 2 Deployment and Owner Bootstrap](docs/PHASE-2-SETUP.md)**.
 
-## Current functionality (Phase 1)
-Private sign-in, two separate workspaces, room creation and editing, item creation and editing, quick quantity adjustments, category and condition fields, item search, room progress, PDF-ready printing and CSV exports, recoverable official Trash, permanent test deletion, test reset, and sample data.
+### Repository and project
 
-## Roadmap
-Photos and Storage rules, collaborative room assignment, independent verification, QR codes, advanced PDF reports, detailed disposition approvals, offline conflict handling and audit trail.
+- GitHub: https://github.com/Silly-Cheese/North-Heights-Inventory-System
+- GitHub Pages site (once enabled): https://silly-cheese.github.io/North-Heights-Inventory-System/
+- Firebase project: `nh-inventory-6f359`
 
-## Development
-No build step or package install needed: the site uses native ES modules with the Firebase 13.1.0 CDN. For local testing, run a static HTTP server (`python -m http.server 8080`) and open http://localhost:8080. Avoid opening `index.html` using `file://`.
+### Requirements
+
+- Node.js 22 (needed for the Cloud Functions deployment).
+- Firebase CLI installed (`npm.cmd install -g firebase-tools` on Windows).
+- Firebase project with billing enabled for Cloud Functions / Storage as required.
+- Firebase Authentication Email/Password provider enabled.
+- Firestore Database created.
+- Firebase Storage bucket created (enable in Firebase Console).
+- GitHub Pages branch `main` / `/(root)` configured.
+
+### Permissions
+
+| Feature | Owner | Inventory collaborator | Congregation member |
+| --- | --- | --- | --- |
+| View rooms and items | Yes | Yes | Yes |
+| Add/edit/count items | Yes | Yes | No |
+| Create/delete rooms | Yes | Yes | No |
+| Assign rooms | Yes | Yes | No |
+| Submit/verify rooms | Yes | Yes | No |
+| Export and print | Yes | Yes | Yes |
+| Create/revoke authorization codes | Yes | No | No |
+| Disable user access | Yes | No | No |
+
+### Testing and security notes
+
+- **Never commit your owner bootstrap secret, service-account credentials, or authorization codes.** The Firebase web API key in `src/app.js` is a public client identifier and is not a backend credential.
+- Bootstrap is an atomic one-time operation guarded by a high-entropy Firebase Functions secret. There is no first-user-wins privilege escalation.
+- Only Firebase Admin SDK functions can grant roles or create/redeem invitations; users cannot edit their own role in Firestore.
+- Photo **download URLs are token-bearing links**. Anyone who receives the URL can view that photo even without signing in. Only upload photos suitable for this model; do not share URLs publicly.
+- Test and official workspaces have separate Firestore namespaces in the same Firebase project, **not** separate infrastructure projects. Consider a second staging project for future high-risk changes.
+- Cloud Functions activity history is operational history, not a tamperproof/legal-grade audit.
+- A room in the Official workspace can only be verified by a different collaborator from the submitter. Testing mode permits same-user verification.
+- Firestore triggers automatically flag verified rooms for rechecking after item changes.
+- Existing records from Phase 1 remain readable; new/edited records support the Phase 2 fields.
+
+## Local site preview
+
+This is a static site; there is no frontend build step:
+
+```powershell
+python -m http.server 8080
+```
+
+Open http://localhost:8080 and ensure `localhost` is in Firebase Authentication's Authorized domains if needed.
+
+## Project layout
+
+- `index.html` — authentication forms, bootstrap entry, app shell
+- `src/app.js` — inventory, collaboration, enrollment, reporting and navigation
+- `src/style.css` — base styling
+- `src/phase2.css` — Phase 2 UI styling
+- `firestore.rules` — role-based access, editable inventory, read-only audit entries
+- `storage.rules` — authenticated photo access and upload limits
+- `functions/index.js` — owner bootstrap, invitations, account controls, activity triggers
+- `docs/PHASE-2-SETUP.md` — deployment and bootstrap steps
+
+## Future roadmap
+
+- More efficient photo handling and authenticated image streaming without tokenized URLs.
+- PDF reports and archived immutable inventory snapshots.
+- Item transfer workflow and disposition/approval tracking.
+- QR room tags and offline counting with conflict resolution.
+- Better cleanup and repair tools for very large test datasets.

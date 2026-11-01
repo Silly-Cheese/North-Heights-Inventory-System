@@ -1,0 +1,22 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function allowed() {
+      return request.auth != null &&
+        firestore.exists(/databases/(default)/documents/authorizedUsers/$(request.auth.uid)) &&
+        firestore.get(/databases/(default)/documents/authorizedUsers/$(request.auth.uid)).data.active == true;
+    }
+    function editor() {
+      return allowed() &&
+        firestore.get(/databases/(default)/documents/authorizedUsers/$(request.auth.uid)).data.role in ['owner','inventory'];
+    }
+    match /inventory/{space}/{itemId}/{filename} {
+      allow read: if allowed() && space in ['test','official'];
+      allow create, update: if editor() && space in ['test','official']
+        && request.resource.size < 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp|heic|heif)');
+      allow delete: if editor() && space in ['test','official'];
+    }
+    match /{allPaths=**} { allow read, write: if false; }
+  }
+}

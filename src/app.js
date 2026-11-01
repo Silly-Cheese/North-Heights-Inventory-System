@@ -1,6 +1,6 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
-import { getFirestore, collection, doc, getDoc, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp, increment } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js';
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-auth.js';
+import { getFirestore, collection, doc, getDoc, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp, increment, runTransaction } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyA5rlmsSfE09vfnhrZkg2DGtV1kOMHWZRw',
@@ -10,15 +10,20 @@ const firebaseConfig = {
   messagingSenderId: '417386366102',
   appId: '1:417386366102:web:afe95a46e22670ea852eb7'
 };
+import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-functions.js';
+import { getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-storage.js';
 const firebase = initializeApp(firebaseConfig);
 const auth = getAuth(firebase);
 const db = getFirestore(firebase);
+const storage = getStorage(firebase);
+const functions = getFunctions(firebase, 'us-central1');
+const call = (name, data = {}) => httpsCallable(functions,name)(data);
 const $ = id => document.getElementById(id);
-const state = { user: null, member: null, space: 'test', page: 'dashboard', roomId: null, rooms: [], items: [], search: '', unsub: [], ready: false, confirm: null };
-const STATUS = { 'not-started': 'Not started', 'in-progress': 'In progress', verified: 'Verified' };
+const state = { user: null, member: null, space: 'test', page: 'dashboard', roomId: null, rooms: [], items: [], members: [], activity: [], invites: [], search: '', unsub: [], ready: false, confirm: null, enrolling: false, setupChecked: false, ownerCreated: false, latestInvite: null };
+const STATUS = { 'not-started': 'Not started', 'in-progress': 'In progress', 'ready-for-review': 'Ready for review', verified: 'Verified' };
 const CATEGORIES = ['Furniture','Worship Supplies','Audio & Video','Books & Literature','Kitchen','Office Supplies','Electronics','Cleaning','Decorations','Other'];
 const CONDITIONS = ['Not assessed','Excellent','Good','Fair','Poor','Broken'];
-const NAV = [ ['dashboard','▦','Dashboard'], ['rooms','▤','Rooms'], ['items','▣','All Inventory'], ['trash','♻','Trash'], ['settings','⚙','Settings'] ];
+const NAV = [ ['dashboard','▦','Dashboard'], ['rooms','▤','Rooms'], ['items','▣','All Inventory'], ['trash','♻','Trash'], ['activity','◷','Activity'], ['settings','⚙','Settings'] ];
 
 function escapeHTML(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 const E = escapeHTML;
@@ -26,6 +31,10 @@ const roomsPath = () => collection(db, 'workspaces', state.space, 'rooms');
 const itemsPath = () => collection(db, 'workspaces', state.space, 'items');
 const roomRef = id => doc(db, 'workspaces', state.space, 'rooms', id);
 const itemRef = id => doc(db, 'workspaces', state.space, 'items', id);
+const canEdit = () => ['owner','inventory'].includes(state.member?.role);
+const isOwner = () => state.member?.role === 'owner';
+const canVerifyRoom = room => canEdit() && room.status === 'ready-for-review' && (state.space === 'test' || room.submittedBy !== state.user?.uid);
+const getPerson = uid => state.members.find(u=>u.id===uid)?.displayName || (uid==='system'?'System':uid ? uid.slice(0,8):'Unassigned');
 const activeRooms = () => state.rooms.filter(r => !r.deletedAt).sort((a,b) => a.name.localeCompare(b.name));
 const activeItems = () => { const ids = new Set(activeRooms().map(r => r.id)); return state.items.filter(i => !i.deletedAt && ids.has(i.roomId)); };
 const findRoom = id => state.rooms.find(r => r.id === id);
@@ -38,7 +47,7 @@ function toast(message, error = false) {
 }
 function errMessage(error) {
   const code = error?.code || '';
-  if (code.includes('permission-denied')) return 'Permission denied. Confirm your UID is in authorizedUsers and publish firestore.rules.';
+  if (code.includes('permission-denied')) return 'Permission denied. Check Firebase rules and the account authorization.';
   if (code.includes('auth/invalid-credential') || code.includes('auth/wrong-password')) return 'Incorrect email or password.';
   if (code.includes('auth/too-many-requests')) return 'Too many attempts. Try again later.';
   return error?.message || 'Something went wrong. Please try again.';
@@ -50,7 +59,9 @@ function showPage(page, roomId = null) {
 }
 function stopListeners() { state.unsub.forEach(fn => fn()); state.unsub = []; }
 function subscribe() {
-  stopListeners(); state.ready = false; state.rooms = []; state.items = []; render();
+  stopListeners(); state.ready = false; state.rooms = []; state.items = [];
+  state.members = []; state.activity = []; state.invites = [];
+  render();
   let gotRooms = false, gotItems = false;
   const received = () => { if (gotRooms && gotItems) state.ready = true; render(); };
   state.unsub.push(onSnapshot(roomsPath(), snap => {
@@ -59,33 +70,95 @@ function subscribe() {
   state.unsub.push(onSnapshot(itemsPath(), snap => {
     state.items = snap.docs.map(x => ({ id:x.id, ...x.data() })); gotItems = true; received();
   }, catchError));
+  state.unsub.push(onSnapshot(doc(db,'authorizedUsers',state.user.uid),snap=>{
+    if(!snap.exists() || snap.data().active===false){
+      toast('Your access to this inventory has been removed.',true);
+      signOut(auth).catch(console.error);
+    }
+  },()=>{signOut(auth).catch(console.error);}));
+  if(canEdit()) state.unsub.push(onSnapshot(collection(db,'authorizedUsers'), snap=>{
+    state.members=snap.docs.map(d=>({id:d.id,...d.data()})).filter(u=>u.active!==false);render();
+  },catchError));
+  state.unsub.push(onSnapshot(collection(db,'workspaces',state.space,'activity'),snap=>{
+    state.activity=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)).slice(0,120);
+    render();
+  },catchError));
+  if(isOwner()) state.unsub.push(onSnapshot(collection(db,'invites'),snap=>{
+    state.invites=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>(b.createdAt?.seconds||0)-(a.createdAt?.seconds||0)).slice(0,100);
+    render();
+  },catchError));
 }
-async function getMembership(user) {
-  const snap = await getDoc(doc(db,'authorizedUsers',user.uid));
-  if (!snap.exists()) throw new Error('This account is not yet approved. Add its Firebase Authentication UID to the authorizedUsers collection.');
-  return snap.data();
+async function refreshSetupStatus() {
+  try {
+    const res=await call('getSetupStatus');
+    state.setupChecked=true; state.ownerCreated=!!res.data.ownerCreated;
+    $('bootstrapNav').hidden=state.ownerCreated;
+  } catch(error) { console.warn('Owner setup status unavailable:',error); }
+}
+function authMode(mode) {
+  for(const m of ['login','register','bootstrap']) {
+    const form=$(m==='login'?'loginForm':m==='register'?'registerForm':'bootstrapForm');
+    if(form) form.hidden=m!==mode;
+  }
+  document.querySelectorAll('[data-auth-mode]').forEach(b=>b.classList.toggle('active',b.dataset.authMode===mode));
+  $('loginError').textContent='';
+}
+async function finishEnrollment(form, owner) {
+  const fd=new FormData(form), email=String(fd.get('email')||'').trim().toLowerCase();
+  const pass=String(fd.get('password')||'');
+  const displayName=String(fd.get('displayName')||'').trim();
+  const errorEl=$(owner?'bootstrapError':'registerError');
+  const submit=form.querySelector('[type=submit]'); submit.disabled=true; errorEl.textContent='';
+  state.enrolling=true;
+  try {
+    if(!auth.currentUser || auth.currentUser.email?.toLowerCase()!==email) {
+      await createUserWithEmailAndPassword(auth,email,pass);
+    }
+    if(owner) {
+      await call('bootstrapOwner',{bootstrapCode:String(fd.get('bootstrapCode')||''),displayName});
+    } else {
+      await call('redeemInvite',{code:String(fd.get('code')||''),displayName});
+    }
+    const member=await getMembership(auth.currentUser);
+    state.user=auth.currentUser; state.member=member;
+    $('auth').hidden=true;$('app').hidden=false;state.ownerCreated=true;
+    form.reset();subscribe();toast(owner?'Owner account initialized.':'Account authorized. Welcome!');
+  } catch(error) {
+    console.error(error);errorEl.textContent=errMessage(error)+
+      (auth.currentUser?' Your sign-in account may already exist; correct the code and resubmit with the same email.':'');
+  } finally { state.enrolling=false;submit.disabled=false; }
 }
 onAuthStateChanged(auth, async user => {
-  stopListeners(); state.user = null; state.member = null; state.ready = false; $('splash').hidden = true;
-  if (!user) { $('app').hidden = true; $('auth').hidden = false; return; }
+  if(state.enrolling) return;
+  stopListeners();state.user=null;state.member=null;state.ready=false;$('splash').hidden=true;
+  if(!user) {
+    $('app').hidden=true;$('auth').hidden=false;authMode('login');
+    refreshSetupStatus();return;
+  }
   try {
-    const member = await getMembership(user);
-    if (auth.currentUser?.uid !== user.uid) return;
-    state.user = user; state.member = member; $('auth').hidden = true; $('app').hidden = false; subscribe();
-  } catch (error) {
-    $('app').hidden = true; $('auth').hidden = false; $('loginError').textContent = errMessage(error);
-    await signOut(auth).catch(() => {});
+    const member=await getMembership(user);
+    if(auth.currentUser?.uid!==user.uid || state.enrolling)return;
+    state.user=user;state.member=member;$('auth').hidden=true;$('app').hidden=false;subscribe();
+  }catch(error){
+    $('app').hidden=true;$('auth').hidden=false;
+    $('loginError').textContent=errMessage(error)+
+      ' If you just signed up, select Register and redeem your code.';
+    refreshSetupStatus();
   }
 });
-$('loginForm').addEventListener('submit', async event => {
-  event.preventDefault(); const form = event.currentTarget; const submit = form.querySelector('button[type="submit"]');
-  $('loginError').textContent = ''; submit.disabled = true; submit.textContent = 'Signing in...';
-  try {
-    await signInWithEmailAndPassword(auth, form.email.value.trim(), form.password.value);
-    form.reset();
-  } catch (error) { $('loginError').textContent = errMessage(error); }
-  finally { submit.disabled = false; submit.textContent = 'Sign in securely'; }
+$('loginForm').addEventListener('submit',async event=>{
+  event.preventDefault();const form=event.currentTarget;
+  const submit=form.querySelector('button[type=submit]');
+  $('loginError').textContent='';submit.disabled=true;submit.textContent='Signing in...';
+  try{await signInWithEmailAndPassword(auth,form.email.value.trim(),form.password.value);form.reset();}
+  catch(error){$('loginError').textContent=errMessage(error);}
+  finally{submit.disabled=false;submit.textContent='Sign in securely';}
 });
+$('registerForm').addEventListener('submit',event=>{event.preventDefault();finishEnrollment(event.currentTarget,false);});
+$('bootstrapForm').addEventListener('submit',event=>{event.preventDefault();finishEnrollment(event.currentTarget,true);});
+document.querySelectorAll('[data-auth-mode]').forEach(button=>button.addEventListener('click',()=>authMode(button.dataset.authMode)));
 
 function header(title, description, actions='') {
   return '<div class="page-head"><div><h1>' + E(title) + '</h1><p>' + E(description) + '</p></div><div class="btn-row">' + actions + '</div></div>';
@@ -95,11 +168,13 @@ function modeBanner() {
     ? '<div class="alert"><strong>Testing workspace.</strong> Practice freely: test data is separate from official records. Deletion here is permanent, and you can reset everything from Settings.</div>'
     : '<div class="alert official"><strong>Official North Heights inventory.</strong> These are the congregation\'s working records. Deleted items can be recovered from Trash.</div>';
 }
+function actionBtn(action,label,id='',cls='btn sm') { return '<button class="'+cls+'" data-action="'+E(action)+'"'+(id?' data-id="'+E(id)+'"':'')+'>'+E(label)+'</button>'; }
+function photoThumbnail(item) { return item.photoUrl?'<img class="item-photo" alt="Item photo" src="'+E(item.photoUrl)+'" loading="lazy">':'<div class="photo-placeholder">▣</div>'; }
 function roomCard(room) {
   const entries = activeItems().filter(i => i.roomId === room.id);
   const count = entries.reduce((sum,i) => sum + (i.quantity || 0), 0);
-  const percent = room.status === 'verified' ? 100 : room.status === 'in-progress' ? 55 : 0;
-  return '<button class="room-card" data-action="openRoom" data-id="' + E(room.id) + '"><div class="room-icon">⌂</div><div class="room-title">' + E(room.name) + '</div><div class="room-desc">' + E(room.description || 'Open this room to review its contents') + '</div><div class="room-bottom"><span class="small muted">' + number(entries.length) + ' types · ' + number(count) + ' units</span>' + statusBadge(room.status) + '</div><div class="progress"><span style="width:' + percent + '%"></span></div></button>';
+  const percent = room.status === 'verified' ? 100 : room.status === 'ready-for-review' ? 85 : room.status === 'in-progress' ? 55 : 0;
+  return '<button class="room-card" data-action="openRoom" data-id="' + E(room.id) + '"><div class="room-icon">⌂</div><div class="room-title">' + E(room.name) + '</div><div class="room-desc">' + E(room.description || 'Open this room to review its contents') + '</div><div class="room-assignee">' + E(room.assignedTo?'Assigned: '+getPerson(room.assignedTo):'Unassigned') + '</div><div class="room-bottom"><span class="small muted">' + number(entries.length) + ' types · ' + number(count) + ' units</span>' + statusBadge(room.status) + '</div><div class="progress"><span style="width:' + percent + '%"></span></div></button>';
 }
 function metrics() {
   const rooms = activeRooms(), items = activeItems();
@@ -118,13 +193,13 @@ function empty(symbol,title,description,action='') {
 function dashboard() {
   const rooms = activeRooms();
   let html = header('Inventory overview','Track the rooms, inventory, and counting progress at North Heights Church of Christ.',
-    '<button class="btn primary" data-action="newItem">+ Add item</button><button class="btn" data-action="newRoom">+ New room</button>');
+    (canEdit()?'<button class="btn primary" data-action="newItem">+ Add item</button><button class="btn" data-action="newRoom">+ New room</button>':''));
   html += modeBanner() + metrics();
   html += '<div class="overview"><div class="panel panel-pad"><div class="section-head"><h2>Rooms & spaces</h2><button class="btn sm" data-action="go" data-page="rooms">View all</button></div>';
   html += rooms.length ? '<div class="room-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">' + rooms.slice(0,6).map(roomCard).join('') + '</div>'
-    : empty('⌂','No rooms created','Start by adding an auditorium, classroom, office, or another space.','<button class="btn primary" data-action="newRoom">Create first room</button>');
+    : empty('⌂','No rooms created','Start by adding an auditorium, classroom, office, or another space.',(canEdit()?'<button class="btn primary" data-action="newRoom">Create first room</button>':''));
   html += '</div><div class="panel panel-pad"><div class="section-head"><h2>Room status</h2></div>';
-  const groups = [['verified','Verified'],['in-progress','In progress'],['not-started','Not started']];
+  const groups = [['verified','Verified'],['ready-for-review','Ready for review'],['in-progress','In progress'],['not-started','Not started']];
   html += groups.map(([status,label]) => {
     const count = rooms.filter(r => (r.status || 'not-started') === status).length;
     const percent = rooms.length ? Math.round(100*count/rooms.length) : 0;
@@ -135,40 +210,68 @@ function dashboard() {
 }
 function roomsPage() {
   const rooms = activeRooms();
-  return header('Rooms & spaces','Organize every area of the church building.','<button class="btn primary" data-action="newRoom">+ Create room</button>') +
+  return header('Rooms & spaces','Organize every area of the church building.',canEdit()?'<button class="btn primary" data-action="newRoom">+ Create room</button>':'') +
     modeBanner() + (rooms.length ? '<div class="room-grid">' + rooms.map(roomCard).join('') + '</div>' :
-    empty('⌂','No rooms yet','Create your first room to begin counting.','<button class="btn primary" data-action="newRoom">+ Create room</button>'));
+    empty('⌂','No rooms yet','Create your first room to begin counting.',(canEdit()?'<button class="btn primary" data-action="newRoom">+ Create room</button>':'')));
 }
 function searchBar() { return '<input id="inventorySearch" class="search" aria-label="Search inventory" placeholder="Search items, categories or notes..." value="' + E(state.search) + '">'; }
 function itemRows(items, showRoom) {
-  const search = state.search.trim().toLowerCase();
-  items = items.filter(i => !search || [i.name,i.category,i.notes,roomName(i.roomId)].some(v => String(v||'').toLowerCase().includes(search)));
-  if (!items.length) return empty('▣',search ? 'Nothing matches your search' : 'No items recorded',search ? 'Try another search term.' : 'Add the first item to this inventory.');
-  return '<div class="panel table-scroll"><table class="item-table"><thead><tr><th>Item</th>' + (showRoom ? '<th>Room</th>' : '') + '<th class="hide-mobile">Category</th><th>Quantity</th><th class="hide-mobile">Condition</th><th>Actions</th></tr></thead><tbody>' +
-    items.sort((a,b)=>a.name.localeCompare(b.name)).map(i => '<tr><td><div class="item-name">' + E(i.name) + '</div><div class="item-sub">' + E((i.notes || '').slice(0,85)) + '</div></td>' +
-      (showRoom ? '<td class="small">' + E(roomName(i.roomId)) + '</td>' : '') +
-      '<td class="hide-mobile small">' + E(i.category || 'Other') + '</td>' +
-      '<td><div class="count"><button title="Remove one" aria-label="Remove one ' + E(i.name) + '" class="count-btn" data-action="count" data-id="' + E(i.id) + '" data-delta="-1" ' + (i.quantity<=0?'disabled':'') + '>−</button><strong>' + number(i.quantity) + '</strong><button title="Add one" aria-label="Add one ' + E(i.name) + '" class="count-btn" data-action="count" data-id="' + E(i.id) + '" data-delta="1">+</button></div></td>' +
-      '<td class="hide-mobile"><span class="small muted">' + E(i.condition || 'Not assessed') + '</span></td>' +
-      '<td><div class="inline-actions"><button class="btn sm" data-action="editItem" data-id="' + E(i.id) + '">Edit</button><button class="btn sm danger" data-action="deleteItem" data-id="' + E(i.id) + '">Delete</button></div></td></tr>').join('') + '</tbody></table></div>';
+  const search=state.search.trim().toLowerCase();
+  items=items.filter(i=>!search||[i.name,i.category,i.notes,roomName(i.roomId)].some(v=>String(v||'').toLowerCase().includes(search)));
+  if(!items.length) return empty('▣',search?'Nothing matches your search':'No items recorded',search?'Try another search term.':'Add the first item to this inventory.');
+  return '<div class="panel table-scroll"><table class="item-table"><thead><tr><th>Item</th>'+(showRoom?'<th>Room</th>':'')+
+    '<th class="hide-mobile">Category</th><th>Quantity</th><th class="hide-mobile">Condition</th><th>Actions</th></tr></thead><tbody>'+
+    items.sort((a,b)=>a.name.localeCompare(b.name)).map(i=>'<tr><td><div class="item-with-photo">'+photoThumbnail(i)+
+    '<div><div class="item-name">'+E(i.name)+'</div><div class="item-sub">'+E((i.notes||'').slice(0,85))+'</div></div></div></td>'+
+    (showRoom?'<td class="small">'+E(roomName(i.roomId))+'</td>':'')+
+    '<td class="hide-mobile small">'+E(i.category||'Other')+'</td>'+
+    '<td><div class="count">'+(canEdit()?'<button title="Remove one" aria-label="Remove one '+E(i.name)+'" class="count-btn" data-action="count" data-id="'+E(i.id)+'" data-delta="-1" '+(i.quantity<=0?'disabled':'')+'>−</button>':'')+
+    '<strong>'+number(i.quantity)+'</strong>'+(canEdit()?'<button title="Add one" aria-label="Add one '+E(i.name)+'" class="count-btn" data-action="count" data-id="'+E(i.id)+'" data-delta="1">+</button>':'')+'</div></td>'+
+    '<td class="hide-mobile"><span class="small muted">'+E(i.condition||'Not assessed')+'</span></td>'+
+    '<td><div class="inline-actions">'+(canEdit()?
+    actionBtn('quick','Quick count',i.id)+actionBtn('editItem','Edit',i.id)+actionBtn('deleteItem','Delete',i.id,'btn sm danger')
+    :'<span class="small muted">View only</span>')+'</div></td></tr>').join('')+'</tbody></table></div>';
 }
 function itemsPage() {
   return header('All inventory','Everything currently recorded throughout the church building.',
-    '<button class="btn primary" data-action="newItem">+ Add item</button><button class="btn" data-action="export">↓ Export CSV</button><button class="btn" data-action="print">Print</button>') +
-    modeBanner() + '<div class="toolbar">' + searchBar() + '<span class="small muted">' + number(activeItems().length) + ' item types</span></div>' + itemRows(activeItems(),true);
+    (canEdit()?'<button class="btn primary" data-action="newItem">+ Add item</button>':'')+
+    '<button class="btn" data-action="export">↓ Export CSV</button><button class="btn" data-action="print">Print</button>')+
+    modeBanner()+'<div class="toolbar">'+searchBar()+'<span class="small muted">'+number(activeItems().length)+' item types</span></div>'+itemRows(activeItems(),true);
 }
 function roomPage() {
-  const room = findRoom(state.roomId);
-  if (!room || room.deletedAt) return roomsPage();
-  const entries = activeItems().filter(i=>i.roomId===room.id);
-  return '<button class="back-link" data-action="go" data-page="rooms">← All rooms</button>' +
-    header(room.name,room.description || 'Inventory items in this room.',
-      '<button class="btn primary" data-action="newItem" data-id="' + E(room.id) + '">+ Add item</button><button class="btn" data-action="editRoom" data-id="' + E(room.id) + '">Edit room</button><button class="btn danger" data-action="deleteRoom" data-id="' + E(room.id) + '">Delete room</button>') +
-    modeBanner() + '<div class="room-detail-bar"><span class="small muted">Inventory status</span>' + statusBadge(room.status) +
-    '<select class="mode-select" id="roomStatus" data-room-id="' + E(room.id) + '" aria-label="Set room status">' +
-    Object.entries(STATUS).map(([id,label])=>'<option value="' + E(id) + '" ' + (room.status===id?'selected':'') + '>' + E(label) + '</option>').join('') +
-    '</select><span class="small muted">' + number(entries.reduce((n,i)=>n+i.quantity,0)) + ' total units</span></div>' +
-    '<div class="toolbar">' + searchBar() + '</div>' + itemRows(entries,false);
+  const room=findRoom(state.roomId);if(!room||room.deletedAt)return roomsPage();
+  const entries=activeItems().filter(i=>i.roomId===room.id);
+  const buttons=canEdit()?
+    '<button class="btn primary" data-action="newItem" data-id="'+E(room.id)+'">+ Add item</button>'+
+    '<button class="btn" data-action="editRoom" data-id="'+E(room.id)+'">Edit room</button>'+
+    '<button class="btn danger" data-action="deleteRoom" data-id="'+E(room.id)+'">Delete room</button>':'';
+  let review='';
+  if(canEdit()) {
+    if(room.status==='ready-for-review') review=canVerifyRoom(room)?'<button class="btn primary" data-action="verifyRoom" data-id="'+E(room.id)+'">✓ Verify this room</button>':'<span class="small muted">Awaiting another inventory collaborator to verify.</span>';
+    else if(room.status!=='verified') review='<button class="btn primary" data-action="submitRoom" data-id="'+E(room.id)+'">Submit for review</button>';
+    else review='<span class="small muted">Verified by '+E(getPerson(room.verifiedBy))+'</span>';
+  }
+  return '<button class="back-link" data-action="go" data-page="rooms">← All rooms</button>'+
+    header(room.name,room.description||'Inventory items in this room.',buttons)+modeBanner()+
+    '<div class="room-detail-bar"><span class="small muted">Inventory status</span>'+statusBadge(room.status)+
+    '<span class="small muted">'+number(entries.reduce((n,i)=>n+i.quantity,0))+' total units</span></div>'+
+    '<div class="review-bar"><div><strong>Room verification</strong><p class="small muted">'+
+    (room.status==='ready-for-review'?'Submitted by '+E(getPerson(room.submittedBy))+'. Another person should confirm the count.':
+     room.status==='verified'?'This room has been verified. Item edits automatically flag it for rechecking.':
+     'Count and check the contents, then submit the room for a second-person review.')+
+    '</p><span class="small muted">Assigned to: '+E(getPerson(room.assignedTo))+'</span></div>'+review+'</div>'+
+    '<div class="toolbar">'+searchBar()+'</div>'+itemRows(entries,false);
+}
+function activityPage() {
+  const events=state.activity;
+  return header('Activity history','Recent recorded changes to rooms and items.')+modeBanner()+
+    '<div class="panel panel-pad"><div class="section-head"><h2>Latest activity</h2><span class="small muted">Up to 120 recent events</span></div>'+
+    (events.length?events.map(event=>{
+      const date=event.createdAt?.toDate?.()?.toLocaleString()||'Just now';
+      const qty=event.changedKeys?.includes('quantity')?' · Quantity: '+number(event.beforeQuantity??0)+' → '+number(event.afterQuantity??0):'';
+      return '<div class="list-row"><div><strong>'+E(event.recordName||'Unknown record')+'</strong><p>'+E(event.recordType)+' '+E(event.operation)+' · '+E(getPerson(event.actorUid))+E(qty)+'</p></div><span class="small muted">'+E(date)+'</span></div>';
+    }).join(''):empty('◷','No activity recorded','Changes appear here after Cloud Functions deployment.'))+
+    '<p class="small muted" style="margin-top:12px">Test deletions may not identify the deleting person. This is an operational history, not an immutable legal audit trail.</p></div>';
 }
 function trashPage() {
   if (state.space === 'test') return header('Trash','Test records are deleted permanently.') + empty('♻','Trash is for official records','In testing, deletes are permanent and a complete reset is available in Settings.');
@@ -181,17 +284,32 @@ function trashPage() {
     (items.length ? items.map(i=>row(i.name,'item',i.id,roomName(i.roomId) + (i.deletedWithRoom ? ' · removed with room' : ''))).join('') : '<p class="muted small">No deleted items.</p>') + '</div>';
 }
 function settingsPage() {
-  return header('Settings','Manage your inventory workspace and personal account.') + modeBanner() +
-    '<div class="panel panel-pad"><h2>Account & workspace</h2>' +
-    '<div class="setting-row"><div><strong>Signed-in account</strong><p>' + E(state.user?.email || '') + '</p></div><span class="badge slate">' + E(state.member?.role || 'member') + '</span></div>' +
-    '<div class="setting-row"><div><strong>Current workspace</strong><p>Switch between test and official records using the workspace selector.</p></div><span class="badge ' + (state.space==='test'?'test':'official') + '">' + (state.space==='test'?'TEST':'OFFICIAL') + '</span></div>' +
-    '<div class="setting-row"><div><strong>Export all active inventory</strong><p>Download a spreadsheet-friendly CSV with all rooms and item quantities.</p></div><button class="btn" data-action="export">Export CSV</button></div>' +
-    (state.space==='test' ?
-      '<div class="setting-row"><div><strong>Generate sample data</strong><p>Add sample rooms and inventory for interface testing. Does not change official data.</p></div><button class="btn" data-action="seed">Generate examples</button></div>' +
-      '<div class="setting-row"><div><strong>Reset testing workspace</strong><p style="color:#a33">Permanently delete all test rooms and items. Official inventory is never affected.</p></div><button class="btn danger" data-action="reset">Reset test data</button></div>'
-      : '<div class="setting-row"><div><strong>Official record protection</strong><p>Deleted records are retained in Trash and can be restored. Back up your inventory regularly using CSV export.</p></div><span class="badge">Enabled</span></div>') +
-    '<div class="setting-row"><div><strong>Sign out</strong><p>End your session on this device.</p></div><button class="btn" data-action="logout">Sign out</button></div></div>' +
-    '<p class="small muted" style="margin-top:16px">North Heights Inventory · Phase 1 · GitHub Pages + Firebase</p>';
+  const users=state.members.filter(m=>m.active!==false);
+  const pending=state.invites.filter(i=>!i.revoked&&!i.redeemedBy&&(i.expiresAt?.toMillis?.()||0)>Date.now());
+  const memberRow=u=>'<div class="setting-row"><div><strong>'+E(u.displayName||u.email)+'</strong><p>'+E(u.email||'')+' · '+E(u.role)+'</p></div>'+
+    (isOwner()&&u.id!==state.user.uid?'<button class="btn sm danger" data-action="disableMember" data-id="'+E(u.id)+'">Revoke access</button>':'')+'</div>';
+  const invites=pending.map(i=>'<div class="setting-row"><div><strong>'+E(i.role)+'</strong><p>'+E(i.email||'Any email')+' · Expires '+E(i.expiresAt?.toDate?.()?.toLocaleDateString()||'in 7 days')+'</p></div>'+
+    '<button class="btn sm danger" data-action="revokeInvite" data-id="'+E(i.id)+'">Revoke code</button></div>').join('');
+  const ownerSection=isOwner()?'<div class="panel panel-pad" style="margin-top:18px"><h2>Authorization codes</h2>'+
+    '<p class="small muted">Issue a single-use invitation that expires after seven days. The code appears only once, so copy it before leaving this page.</p>'+
+    '<form id="inviteForm" class="form-grid"><div class="field"><label>Permission level</label><select name="role"><option value="inventory">Inventory collaborator (edit/count/verify)</option><option value="member">Congregation member (read-only)</option></select></div>'+
+    '<div class="field"><label>Restrict to email (recommended)</label><input type="email" name="email" placeholder="member@example.com"></div>'+
+    '<div class="field full-span"><button type="submit" class="btn primary">Generate authorization code</button></div></form>'+
+    (state.latestInvite?'<div class="issued-code"><strong>New one-time code</strong><p class="auth-code">'+E(state.latestInvite)+'</p><button class="btn sm" data-action="copyInvite">Copy code</button><p class="small">Send this code privately. It will not be shown again after a refresh.</p></div>':'')+
+    '<h3 style="margin-top:25px">Unredeemed invitations ('+pending.length+')</h3>'+(invites||'<p class="small muted">No pending codes.</p>')+
+    '<h3 style="margin-top:24px">Authorized users ('+users.length+')</h3>'+(users.map(memberRow).join('')||'<p class="small muted">Loading users...</p>')+
+    '</div>':'';
+  return header('Settings','Manage your workspace, account, and access permissions.')+modeBanner()+
+    '<div class="panel panel-pad"><h2>Account & workspace</h2>'+
+    '<div class="setting-row"><div><strong>Signed-in account</strong><p>'+E(state.user?.email||'')+'</p></div><span class="badge slate">'+E(state.member?.role||'member')+'</span></div>'+
+    '<div class="setting-row"><div><strong>Current workspace</strong><p>Switch between testing and official records using the top selector.</p></div><span class="badge '+(state.space==='test'?'test':'official')+'">'+(state.space==='test'?'TEST':'OFFICIAL')+'</span></div>'+
+    '<div class="setting-row"><div><strong>Export active inventory</strong><p>Download a CSV containing rooms and item quantities.</p></div><button class="btn" data-action="export">Export CSV</button></div>'+
+    (state.space==='test'&&canEdit()?
+      '<div class="setting-row"><div><strong>Generate sample data</strong><p>Add four sample rooms and several items for testing.</p></div><button class="btn" data-action="seed">Generate examples</button></div>'+
+      '<div class="setting-row"><div><strong>Reset test workspace</strong><p style="color:#a33">Permanently remove test rooms and items. Official data is unaffected.</p></div><button class="btn danger" data-action="reset">Reset test data</button></div>':
+      '<div class="setting-row"><div><strong>Official record protection</strong><p>Official deletes enter Trash for recovery.</p></div><span class="badge">Enabled</span></div>')+
+    '<div class="setting-row"><div><strong>Sign out</strong><p>End the current session.</p></div><button class="btn" data-action="logout">Sign out</button></div></div>'+
+    ownerSection+'<p class="small muted" style="margin-top:16px">North Heights Inventory · Phase 2 · GitHub Pages + Firebase</p>';
 }
 function mainHTML() {
   if (!state.ready) return '<div class="empty"><h3>Loading inventory...</h3><p>Synchronizing your rooms and items securely.</p></div>';
@@ -200,6 +318,7 @@ function mainHTML() {
   if (state.page === 'room') return roomPage();
   if (state.page === 'items') return itemsPage();
   if (state.page === 'trash') return trashPage();
+  if (state.page === 'activity') return activityPage();
   return settingsPage();
 }
 function render() {
@@ -217,26 +336,63 @@ function openModal(html) { const modal = $('modal'); modal.innerHTML = '<div cla
 function closeModal() { $('modal').close(); $('modal').innerHTML = ''; }
 function modalHeading(title) { return '<div class="modal-head"><h2>' + E(title) + '</h2><button class="modal-close" type="button" data-action="closeModal" aria-label="Close">×</button></div>'; }
 function roomEditor(room=null) {
-  openModal(modalHeading(room?'Edit room':'Create room') + '<form id="roomForm" class="form-stack"><input type="hidden" name="id" value="' + E(room?.id || '') + '">' +
-    '<div class="field"><label>Room name *</label><input name="name" maxlength="120" required autofocus placeholder="e.g. Auditorium" value="' + E(room?.name || '') + '"></div>' +
-    '<div class="field"><label>Description (optional)</label><textarea name="description" maxlength="3000" placeholder="Location, notes, or other details">' + E(room?.description || '') + '</textarea></div>' +
-    '<div class="field"><label>Inventory progress</label><select name="status">' + Object.entries(STATUS).map(([k,v])=>'<option value="' + k + '" ' + ((room?.status||'not-started')===k?'selected':'') + '>' + E(v) + '</option>').join('') + '</select></div>' +
+  if(!canEdit())return toast('Your account has read-only access.',true);
+  const users=state.members.filter(u=>['owner','inventory'].includes(u.role));
+  openModal(modalHeading(room?'Edit room':'Create room')+
+    '<form id="roomForm" class="form-stack"><input type="hidden" name="id" value="'+E(room?.id||'')+'">'+
+    '<div class="field"><label>Room name *</label><input name="name" maxlength="120" required autofocus placeholder="e.g. Auditorium" value="'+E(room?.name||'')+'"></div>'+
+    '<div class="field"><label>Description (optional)</label><textarea name="description" maxlength="3000">'+E(room?.description||'')+'</textarea></div>'+
+    '<div class="field"><label>Assigned inventory worker</label><select name="assignedTo"><option value="">Unassigned</option>'+
+    users.map(u=>'<option value="'+E(u.id)+'" '+(room?.assignedTo===u.id?'selected':'')+'>'+E(u.displayName||u.email)+'</option>').join('')+
+    '</select></div>'+
+    '<div class="field"><label>Progress</label><select name="status">'+
+    Object.entries(STATUS).filter(([k])=>['not-started','in-progress'].includes(k)).map(([k,v])=>'<option value="'+E(k)+'" '+((room?.status||'not-started')===k?'selected':'')+'>'+E(v)+'</option>').join('')+
+    '</select><span class="small muted">Use Submit for Review and Verify in the room to complete a review.</span></div>'+
     '<p class="form-error" id="roomFormError"></p><div class="modal-foot"><button type="button" class="btn" data-action="closeModal">Cancel</button><button class="btn primary" type="submit">Save room</button></div></form>');
 }
 function itemEditor(item=null, defaultRoom=null) {
-  const rooms = activeRooms();
-  if (!rooms.length) { toast('Create a room first, then add inventory items.',true); return roomEditor(); }
-  const selected = item?.roomId || defaultRoom || rooms[0].id;
-  const categories = [...new Set([...CATEGORIES,...state.items.map(i=>i.category).filter(Boolean)])].sort();
-  openModal(modalHeading(item?'Edit item':'Add inventory item') +
-    '<form id="itemForm" class="form-grid"><input type="hidden" name="id" value="' + E(item?.id || '') + '">' +
-    '<div class="field full-span"><label>Item name *</label><input name="name" maxlength="160" required autofocus placeholder="e.g. Folding Chairs" value="' + E(item?.name || '') + '"></div>' +
-    '<div class="field"><label>Room *</label><select name="roomId" required>' + rooms.map(r=>'<option value="' + E(r.id) + '" ' + (r.id===selected?'selected':'') + '>' + E(r.name) + '</option>').join('') + '</select></div>' +
-    '<div class="field"><label>Quantity *</label><input name="quantity" type="number" required min="0" max="1000000" step="1" value="' + E(item?.quantity ?? 1) + '"></div>' +
-    '<div class="field"><label>Category</label><input name="category" maxlength="100" list="categoryOptions" placeholder="Select or type a category" value="' + E(item?.category || 'Furniture') + '"><datalist id="categoryOptions">' + categories.map(c=>'<option value="' + E(c) + '"></option>').join('') + '</datalist></div>' +
-    '<div class="field"><label>Condition</label><select name="condition">' + CONDITIONS.map(c=>'<option value="' + E(c) + '" ' + ((item?.condition || 'Not assessed')===c?'selected':'') + '>' + E(c) + '</option>').join('') + '</select></div>' +
-    '<div class="field full-span"><label>Notes (optional)</label><textarea name="notes" maxlength="5000" placeholder="Color, size, location details, etc.">' + E(item?.notes || '') + '</textarea></div>' +
+  if(!canEdit())return toast('Your account has read-only access.',true);
+  const rooms=activeRooms();
+  if(!rooms.length){toast('Create a room first, then add items.',true);return roomEditor();}
+  const selected=item?.roomId||defaultRoom||rooms[0].id;
+  const categories=[...new Set([...CATEGORIES,...state.items.map(i=>i.category).filter(Boolean)])].sort();
+  openModal(modalHeading(item?'Edit item':'Add inventory item')+
+    '<form id="itemForm" class="form-grid"><input type="hidden" name="id" value="'+E(item?.id||'')+'">'+
+    '<div class="field full-span"><label>Item name *</label><input name="name" maxlength="160" required autofocus placeholder="e.g. Folding Chairs" value="'+E(item?.name||'')+'"></div>'+
+    '<div class="field"><label>Room *</label><select name="roomId" required>'+rooms.map(r=>'<option value="'+E(r.id)+'" '+(r.id===selected?'selected':'')+'>'+E(r.name)+'</option>').join('')+'</select></div>'+
+    '<div class="field"><label>Quantity *</label><input name="quantity" type="number" required min="0" max="1000000" step="1" value="'+E(item?.quantity??1)+'"></div>'+
+    '<div class="field"><label>Category</label><input name="category" maxlength="100" list="categoryOptions" value="'+E(item?.category||'Furniture')+'"><datalist id="categoryOptions">'+categories.map(c=>'<option value="'+E(c)+'"></option>').join('')+'</datalist></div>'+
+    '<div class="field"><label>Condition</label><select name="condition">'+CONDITIONS.map(c=>'<option value="'+E(c)+'" '+((item?.condition||'Not assessed')===c?'selected':'')+'>'+E(c)+'</option>').join('')+'</select></div>'+
+    '<div class="field full-span"><label>Notes (optional)</label><textarea name="notes" maxlength="5000">'+E(item?.notes||'')+'</textarea></div>'+
+    (item?.photoUrl?'<div class="field full-span"><img src="'+E(item.photoUrl)+'" alt="Current item photo" class="photo-preview">'+
+    actionBtn('removePhoto','Remove photo',item.id,'btn sm danger')+'</div>':'')+
+    '<div class="field full-span"><label>Photograph (optional)</label><input type="file" name="photo" accept="image/*" capture="environment">'+
+    '<span class="small muted">Maximum 8 MB. A new photo replaces the previous one.</span></div>'+
     '<p id="itemFormError" class="form-error full-span"></p><div class="modal-foot full-span"><button type="button" class="btn" data-action="closeModal">Cancel</button><button type="submit" class="btn primary">Save item</button></div></form>');
+}
+function quickCount(item) {
+  if(!canEdit())return;
+  openModal(modalHeading('Quick count · '+item.name)+
+    '<p class="muted small">Current quantity: <strong>'+number(item.quantity)+'</strong></p>'+
+    '<div class="quick-grid">'+[-10,-5,-1,1,5,10].map(n=>'<button class="btn '+(n>0?'primary':'')+'" data-action="quickAdjust" data-id="'+E(item.id)+'" data-delta="'+n+'">'+(n>0?'+':'')+n+'</button>').join('')+'</div>'+
+    '<div class="modal-foot"><button class="btn" data-action="closeModal">Done</button></div>');
+}
+async function adjustCount(item,delta) {
+  if(!canEdit())throw new Error('Read-only accounts cannot edit quantities.');
+  await runTransaction(db,async tx=>{
+    const reference=itemRef(item.id);const snap=await tx.get(reference);
+    if(!snap.exists||snap.data().deletedAt)throw new Error('This item is no longer available.');
+    const next=snap.data().quantity+delta;
+    if(!Number.isInteger(next)||next<0||next>1000000)throw new Error('Quantity must remain between 0 and 1,000,000.');
+    tx.update(reference,{quantity:next,photoPath:snap.data().photoPath||'',photoUrl:snap.data().photoUrl||'',
+      updatedAt:serverTimestamp(),updatedBy:state.user.uid});
+  });
+}
+async function removePhoto(item) {
+  if(!item?.photoPath)return;
+  await deleteObject(storageRef(storage,item.photoPath));
+  await updateDoc(itemRef(item.id),{photoPath:'',photoUrl:'',updatedBy:state.user.uid,updatedAt:serverTimestamp()});
+  closeModal();toast('Photograph removed.');
 }
 function confirmDialog(title,description,accept,callback,danger=true) {
   state.confirm = callback;
@@ -254,7 +410,10 @@ async function writeChunks(ops) {
   }
 }
 async function deleteItem(item) {
-  if (state.space === 'test') await deleteDoc(itemRef(item.id));
+  if (state.space === 'test') {
+    await deleteDoc(itemRef(item.id));
+    if(item.photoPath) await deleteObject(storageRef(storage,item.photoPath)).catch(err=>console.warn('Photo cleanup:',err));
+  }
   else await updateDoc(itemRef(item.id), {deletedAt: serverTimestamp(),deletedWithRoom:false,updatedAt:serverTimestamp(),updatedBy:state.user.uid});
   toast('Item ' + (state.space === 'test'?'deleted.':'moved to Trash.'));
 }
@@ -262,6 +421,7 @@ async function deleteRoom(room) {
   const contents = state.items.filter(i=>i.roomId===room.id);
   if (state.space === 'test') {
     await writeChunks([...contents.map(i=>({type:'delete',ref:itemRef(i.id)})),{type:'delete',ref:roomRef(room.id)}]);
+    await Promise.all(contents.filter(i=>i.photoPath).map(i=>deleteObject(storageRef(storage,i.photoPath)).catch(err=>console.warn('Photo cleanup:',err))));
   } else {
     const actions = contents.filter(i=>!i.deletedAt).map(i=>({
       type:'update',ref:itemRef(i.id),
@@ -310,9 +470,9 @@ async function seedTest() {
   const actions=[];
   for(const sample of samples) {
     const ref = doc(roomsPath());
-    actions.push({type:'set',ref,data:{name:sample.name,description:sample.description,status:sample.status,createdAt:serverTimestamp(),updatedAt:serverTimestamp(),createdBy:state.user.uid,updatedBy:state.user.uid,deletedAt:null}});
+    actions.push({type:'set',ref,data:{name:sample.name,description:sample.description,status:sample.status,assignedTo:'',reviewNote:'',submittedBy:'',submittedAt:null,verifiedBy:'',verifiedAt:null,createdAt:serverTimestamp(),updatedAt:serverTimestamp(),createdBy:state.user.uid,updatedBy:state.user.uid,deletedAt:null}});
     for(const [name,quantity,category] of sample.items) {
-      actions.push({type:'set',ref:doc(itemsPath()),data:{name,quantity,category,roomId:ref.id,condition:'Not assessed',notes:'Sample data — replace or delete before official use.',createdAt:serverTimestamp(),updatedAt:serverTimestamp(),createdBy:state.user.uid,updatedBy:state.user.uid,deletedAt:null,deletedWithRoom:false}});
+      actions.push({type:'set',ref:doc(itemsPath()),data:{name,quantity,category,roomId:ref.id,condition:'Not assessed',notes:'Sample data — replace or delete before official use.',photoPath:'',photoUrl:'',createdAt:serverTimestamp(),updatedAt:serverTimestamp(),createdBy:state.user.uid,updatedBy:state.user.uid,deletedAt:null,deletedWithRoom:false}});
     }
   }
   await writeChunks(actions); toast('Sample inventory added to Test workspace.');
@@ -322,6 +482,7 @@ async function resetTest() {
   const response = prompt('Type RESET TEST to permanently delete ALL test rooms and items. Official data will be untouched.');
   if (response !== 'RESET TEST') { toast('Reset cancelled.'); return; }
   await writeChunks([...state.items.map(i=>({type:'delete',ref:itemRef(i.id)})),...state.rooms.map(r=>({type:'delete',ref:roomRef(r.id)}))]);
+  await Promise.all(state.items.filter(i=>i.photoPath).map(i=>deleteObject(storageRef(storage,i.photoPath)).catch(err=>console.warn('Photo cleanup:',err))));
   toast('Testing workspace reset.'); showPage('dashboard');
 }
 function switchSpace(space) {
@@ -331,10 +492,7 @@ function switchSpace(space) {
 document.addEventListener('change', async event => {
   const target = event.target;
   if (target.id==='spaceSelector') { switchSpace(target.value); return; }
-  if (target.id==='roomStatus') {
-    try { await updateDoc(roomRef(target.dataset.roomId),{status:target.value,updatedAt:serverTimestamp(),updatedBy:state.user.uid}); toast('Room progress saved.'); }
-    catch(error) { catchError(error); }
-  }
+
 });
 document.addEventListener('input', event => {
   if(event.target.id !== 'inventorySearch') return;
@@ -350,16 +508,54 @@ document.addEventListener('click', async event => {
   try {
     if(action==='go') return showPage(button.dataset.page);
     if(action==='openRoom') return showPage('room',id);
+    if(['newRoom','editRoom','newItem','editItem','count','quick','quickAdjust','deleteItem','deleteRoom','restoreRoom','restoreItem','submitRoom','verifyRoom','removePhoto','seed','reset'].includes(action) && !canEdit()) throw new Error('This account has read-only access.');
+    if(['createInvite','revokeInvite','disableMember'].includes(action) && !isOwner()) throw new Error('Only the owner can manage accounts.');
     if(action==='newRoom') return roomEditor();
     if(action==='editRoom') return roomEditor(findRoom(id));
     if(action==='newItem') return itemEditor(null,id);
     if(action==='editItem') return itemEditor(state.items.find(i=>i.id===id));
     if(action==='closeModal') return closeModal();
+    if(action==='quick')return quickCount(state.items.find(i=>i.id===id));
+    if(action==='removePhoto'){
+      const item=state.items.find(i=>i.id===id);
+      return confirmDialog('Remove item photo?','The current photo will be deleted.','Remove photo',()=>removePhoto(item));
+    }
+    if(action==='quickAdjust'){
+      const item=state.items.find(i=>i.id===id);await adjustCount(item,Number(button.dataset.delta));
+      closeModal();toast('Count updated.');return;
+    }
+    if(action==='submitRoom') {
+      const room=findRoom(id);
+      return confirmDialog('Submit '+room.name+' for review?','Another inventory collaborator will need to check and verify this room.','Submit room',async()=>{
+        await updateDoc(roomRef(id),{status:'ready-for-review',submittedBy:state.user.uid,submittedAt:serverTimestamp(),verifiedBy:'',verifiedAt:null,reviewNote:'',updatedBy:state.user.uid,updatedAt:serverTimestamp(),assignedTo:room.assignedTo||''});
+        toast('Room submitted for independent verification.');
+      },false);
+    }
+    if(action==='verifyRoom'){
+      const room=findRoom(id);if(!canVerifyRoom(room))throw new Error('A different collaborator must verify official rooms.');
+      return confirmDialog('Verify '+room.name+'?','Confirm that you personally reviewed the room and its counts.','Verify inventory',async()=>{
+        await updateDoc(roomRef(id),{status:'verified',verifiedBy:state.user.uid,verifiedAt:serverTimestamp(),updatedBy:state.user.uid,updatedAt:serverTimestamp()});
+        toast('Room verified.');
+      },false);
+    }
+    if(action==='copyInvite'){
+      if(state.latestInvite){await navigator.clipboard.writeText(state.latestInvite);toast('Authorization code copied.');}return;
+    }
+    if(action==='revokeInvite'){
+      return confirmDialog('Revoke invitation?','The authorization code will no longer allow registration.','Revoke code',async()=>{
+        await call('revokeInvite',{inviteId:id});toast('Invitation revoked.');
+      });
+    }
+    if(action==='disableMember'){
+      const person=state.members.find(u=>u.id===id);
+      return confirmDialog('Remove member access?','This will prevent '+(person?.displayName||'this person')+' from opening North Heights records. Their Authentication user will remain in Firebase.','Remove access',async()=>{
+        await call('disableMember',{uid:id});toast('Member access revoked.');
+      });
+    }
     if(action==='count') {
-      const item=state.items.find(i=>i.id===id), delta=Number(button.dataset.delta);
-      if (!item || item.deletedAt || item.quantity+delta<0) return;
-      await updateDoc(itemRef(id),{quantity:increment(delta),updatedAt:serverTimestamp(),updatedBy:state.user.uid});
-      return;
+      const item=state.items.find(i=>i.id===id),delta=Number(button.dataset.delta);
+      if(!item||item.deletedAt)return;
+      await adjustCount(item,delta);return;
     }
     if(action==='deleteItem') {
       const item=state.items.find(i=>i.id===id); if(!item) return;
@@ -383,15 +579,30 @@ document.addEventListener('click', async event => {
   } catch(error) { catchError(error); }
 });
 document.addEventListener('submit', async event => {
+  if(event.target.id==='inviteForm') {
+    event.preventDefault();const form=event.target;
+    const btn=form.querySelector('[type=submit]');btn.disabled=true;
+    try {
+      if(!isOwner())throw new Error('Only owner can issue codes.');
+      const fd=new FormData(form);const result=await call('createInvite',{role:fd.get('role'),email:fd.get('email')});
+      state.latestInvite=result.data.code;render();toast('One-time authorization code created.');
+    }catch(error){catchError(error);}finally{btn.disabled=false;}return;
+  }
   if (!['roomForm','itemForm'].includes(event.target.id)) return;
   event.preventDefault();
+  if(!canEdit()){toast('Read-only account.',true);return;}
   const form=event.target; const fd=new FormData(form);
   const button=form.querySelector('[type="submit"]'); button.disabled=true;
   try {
     if(form.id==='roomForm') {
       const id=String(fd.get('id')||''), name=String(fd.get('name')||'').trim();
       if(!name) throw new Error('Room name is required.');
-      const values={name,description:String(fd.get('description')||'').trim(),status:String(fd.get('status')),updatedAt:serverTimestamp(),updatedBy:state.user.uid};
+      const old=id?findRoom(id):null;
+      const values={name,description:String(fd.get('description')||'').trim(),status:String(fd.get('status')),
+        assignedTo:String(fd.get('assignedTo')||''),reviewNote:old?.reviewNote||'',submittedBy:old?.submittedBy||'',
+        submittedAt:old?.submittedAt||null,verifiedBy:old?.verifiedBy||'',verifiedAt:old?.verifiedAt||null,
+        updatedAt:serverTimestamp(),updatedBy:state.user.uid};
+      if(old?.status==='verified' && values.status!=='verified'){values.verifiedAt=null;values.verifiedBy='';}
       if(id) await updateDoc(roomRef(id),values);
       else await addDoc(roomsPath(),{...values,createdAt:serverTimestamp(),createdBy:state.user.uid,deletedAt:null});
       closeModal();toast('Room saved.');
@@ -400,9 +611,23 @@ document.addEventListener('submit', async event => {
       const id=String(fd.get('id')||''), quantity=Number(fd.get('quantity')), name=String(fd.get('name')||'').trim(), roomId=String(fd.get('roomId')||'');
       if(!name || !roomId || !Number.isInteger(quantity) || quantity<0 || quantity>1000000) throw new Error('Enter an item name, valid room, and whole-number quantity (0 to 1,000,000).');
       if(!activeRooms().some(r=>r.id===roomId)) throw new Error('Select an existing active room.');
-      const values={name,roomId,quantity,category:String(fd.get('category')||'Other').trim()||'Other',condition:String(fd.get('condition')||'Not assessed'),notes:String(fd.get('notes')||'').trim(),updatedAt:serverTimestamp(),updatedBy:state.user.uid};
-      if(id) await updateDoc(itemRef(id),values);
-      else await addDoc(itemsPath(),{...values,createdAt:serverTimestamp(),createdBy:state.user.uid,deletedAt:null,deletedWithRoom:false});
+      const old=id?state.items.find(i=>i.id===id):null;
+      const values={name,roomId,quantity,category:String(fd.get('category')||'Other').trim()||'Other',
+        condition:String(fd.get('condition')||'Not assessed'),notes:String(fd.get('notes')||'').trim(),
+        photoPath:old?.photoPath||'',photoUrl:old?.photoUrl||'',updatedAt:serverTimestamp(),updatedBy:state.user.uid};
+      let ref;
+      if(id){ref=itemRef(id);await updateDoc(ref,values);}
+      else ref=await addDoc(itemsPath(),{...values,createdAt:serverTimestamp(),createdBy:state.user.uid,deletedAt:null,deletedWithRoom:false});
+      const photo=fd.get('photo');
+      if(photo instanceof File && photo.size){
+        if(photo.size>=8*1024*1024 || !['image/jpeg','image/png','image/webp','image/heic','image/heif'].includes(photo.type))throw new Error('Choose a JPEG, PNG, WebP or HEIC image smaller than 8 MB.');
+        const path='inventory/'+state.space+'/'+ref.id+'/'+Date.now()+'-'+Math.random().toString(36).slice(2)+'.'+(photo.type.split('/')[1]||'jpg').replace(/[^a-z0-9]/gi,'');
+        const photoRef=storageRef(storage,path);
+        await uploadBytes(photoRef,photo,{contentType:photo.type});
+        const url=await getDownloadURL(photoRef);
+        await updateDoc(ref,{photoPath:path,photoUrl:url,updatedBy:state.user.uid,updatedAt:serverTimestamp()});
+        if(old?.photoPath)deleteObject(storageRef(storage,old.photoPath)).catch(err=>console.warn('Previous photo cleanup:',err));
+      }
       closeModal();toast('Item saved.');
     }
   } catch(error) {

@@ -8,6 +8,7 @@
   <title>North Heights Inventory</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./src/style.css">
+  <link rel="stylesheet" href="./src/phase2.css">
 </head>
 <body>
   <div id="splash" class="splash"><div class="brand-mark">NH</div><h1>North Heights Inventory</h1><p>Connecting securely...</p></div>
@@ -17,6 +18,11 @@
       <div class="eyebrow">NORTH HEIGHTS CHURCH OF CHRIST</div>
       <h1>Inventory Management</h1>
       <p class="muted">A private workspace for documenting and organizing the congregation's property.</p>
+      <div class="auth-tabs">
+        <button type="button" class="auth-tab active" data-auth-mode="login">Sign in</button>
+        <button type="button" class="auth-tab" data-auth-mode="register">Have a code?</button>
+        <button type="button" class="auth-tab" data-auth-mode="bootstrap" id="bootstrapNav">Owner setup</button>
+      </div>
       <form id="loginForm" class="form-stack">
         <label for="email">Email address</label>
         <input id="email" name="email" type="email" autocomplete="username" placeholder="name@example.com" required>
@@ -24,6 +30,32 @@
         <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Your password" required>
         <button class="btn primary full" type="submit">Sign in securely</button>
         <p id="loginError" class="form-error" role="alert" aria-live="polite"></p>
+      </form>
+      <form id="registerForm" class="form-stack" hidden>
+        <p class="small muted">Create your personal account using the authorization code from the North Heights inventory owner.</p>
+        <label for="regName">Full name</label>
+        <input id="regName" name="displayName" minlength="2" maxlength="80" autocomplete="name" required>
+        <label for="regEmail">Email address</label>
+        <input id="regEmail" name="email" type="email" autocomplete="email" required>
+        <label for="regPassword">Choose password</label>
+        <input id="regPassword" name="password" type="password" minlength="6" autocomplete="new-password" required>
+        <label for="regCode">Authorization code</label>
+        <input id="regCode" name="code" placeholder="XXXXX-XXXXX-XXXXX-XXXXX" autocomplete="off" maxlength="30" required>
+        <button class="btn primary full" type="submit">Create authorized account</button>
+        <p id="registerError" class="form-error" role="alert" aria-live="polite"></p>
+      </form>
+      <form id="bootstrapForm" class="form-stack" hidden>
+        <p class="small muted">First-time owner setup only. Use the private bootstrap secret configured in Firebase Functions. This creates your Authentication account and owner authorization document automatically.</p>
+        <label for="ownerName">Owner full name</label>
+        <input id="ownerName" name="displayName" minlength="2" maxlength="80" autocomplete="name" required>
+        <label for="ownerEmail">Owner email address</label>
+        <input id="ownerEmail" name="email" type="email" autocomplete="email" required>
+        <label for="ownerPassword">Choose password</label>
+        <input id="ownerPassword" name="password" type="password" minlength="6" autocomplete="new-password" required>
+        <label for="bootstrapCode">Private bootstrap secret</label>
+        <input id="bootstrapCode" name="bootstrapCode" type="password" autocomplete="off" required>
+        <button class="btn primary full" type="submit">Initialize owner account</button>
+        <p id="bootstrapError" class="form-error" role="alert" aria-live="polite"></p>
       </form>
       <div class="auth-footer">Access is restricted to approved North Heights inventory members.</div>
     </div>

@@ -2,49 +2,89 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function member() {
+    function authorized() {
       return signedIn() &&
-        exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid));
+        exists(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)).data.active == true;
     }
-    function validWorkspace(id) { return id == 'test' || id == 'official'; }
+    function role() {
+      return get(/databases/$(database)/documents/authorizedUsers/$(request.auth.uid)).data.role;
+    }
+    function editor() { return authorized() && role() in ['owner','inventory']; }
+    function owner() { return authorized() && role() == 'owner'; }
+    function workspace(space) { return space in ['test','official']; }
     function validRoom() {
-      return request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 120
-        && request.resource.data.description is string
-        && request.resource.data.description.size() <= 3000
-        && request.resource.data.status in ['not-started', 'in-progress', 'verified'];
+      return request.resource.data.keys().hasOnly(['name','description','status','assignedTo','reviewNote','submittedBy','submittedAt','verifiedBy','verifiedAt','createdAt','createdBy','updatedAt','updatedBy','deletedAt']) &&
+        request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 120 &&
+        request.resource.data.description is string && request.resource.data.description.size() <= 3000 &&
+        request.resource.data.status in ['not-started','in-progress','ready-for-review','verified'] &&
+        request.resource.data.get('reviewNote','') is string && request.resource.data.get('reviewNote','').size() <= 2000 &&
+        request.resource.data.get('assignedTo','') is string && request.resource.data.get('assignedTo','').size() <= 128 &&
+        request.resource.data.get('submittedBy','') is string && request.resource.data.get('submittedBy','').size() <= 128 &&
+        request.resource.data.get('verifiedBy','') is string && request.resource.data.get('verifiedBy','').size() <= 128;
     }
     function validItem() {
-      return request.resource.data.name is string
-        && request.resource.data.name.size() > 0
-        && request.resource.data.name.size() <= 160
-        && request.resource.data.roomId is string
-        && request.resource.data.roomId.size() > 0
-        && request.resource.data.quantity is int
-        && request.resource.data.quantity >= 0
-        && request.resource.data.quantity <= 1000000
-        && request.resource.data.category is string
-        && request.resource.data.category.size() <= 100
-        && request.resource.data.condition is string
-        && request.resource.data.condition in ['Excellent','Good','Fair','Poor','Broken','Not assessed']
-        && request.resource.data.notes is string
-        && request.resource.data.notes.size() <= 5000;
+      return request.resource.data.keys().hasOnly(['name','roomId','quantity','category','condition','notes','photoPath','photoUrl','createdAt','createdBy','updatedAt','updatedBy','deletedAt','deletedWithRoom']) &&
+        request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 160 &&
+        request.resource.data.roomId is string && request.resource.data.roomId.size() > 0 &&
+        request.resource.data.quantity is int && request.resource.data.quantity >= 0 && request.resource.data.quantity <= 1000000 &&
+        request.resource.data.category is string && request.resource.data.category.size() <= 100 &&
+        request.resource.data.condition in ['Excellent','Good','Fair','Poor','Broken','Not assessed'] &&
+        request.resource.data.notes is string && request.resource.data.notes.size() <= 5000 &&
+        request.resource.data.get('photoPath','') is string && request.resource.data.get('photoPath','').size() <= 500 &&
+        request.resource.data.get('photoUrl','') is string && request.resource.data.get('photoUrl','').size() <= 3000;
     }
-    // The allowlist is provisioned only by a Firebase project administrator.
+    function createdByUser() {
+      return request.resource.data.createdBy == request.auth.uid &&
+        request.resource.data.updatedBy == request.auth.uid;
+    }
+    function updatedByUser() {
+      return request.resource.data.updatedBy == request.auth.uid &&
+        request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.createdAt == resource.data.createdAt;
+    }
+    function verifyAllowed(space) {
+      return (
+        request.resource.data.status != 'verified' ||
+        (resource.data.status == 'verified' &&
+          request.resource.data.verifiedBy == resource.data.verifiedBy) ||
+        (resource.data.status == 'ready-for-review' &&
+          request.resource.data.verifiedBy == request.auth.uid &&
+          request.resource.data.submittedBy == resource.data.submittedBy &&
+          (space == 'test' || resource.data.submittedBy != request.auth.uid))
+      ) && (
+        request.resource.data.status != 'ready-for-review' ||
+        (resource.data.status != 'ready-for-review' &&
+          request.resource.data.submittedBy == request.auth.uid) ||
+        (resource.data.status == 'ready-for-review' &&
+          request.resource.data.submittedBy == resource.data.submittedBy)
+      );
+    }
     match /authorizedUsers/{uid} {
-      allow get: if signedIn() && request.auth.uid == uid;
-      allow list, create, update, delete: if false;
+      allow get: if authorized() && (request.auth.uid == uid || editor());
+      allow list: if editor();
+      allow create, update, delete: if false;
+    }
+    match /invites/{inviteId} {
+      allow read: if owner();
+      allow write: if false;
     }
     match /workspaces/{space}/rooms/{roomId} {
-      allow read: if member() && validWorkspace(space);
-      allow create, update: if member() && validWorkspace(space) && validRoom();
-      allow delete: if member() && space == 'test';
+      allow read: if authorized() && workspace(space);
+      allow create: if editor() && workspace(space) && validRoom() && createdByUser();
+      allow update: if editor() && workspace(space) && validRoom() && updatedByUser() && verifyAllowed(space);
+      allow delete: if editor() && space == 'test';
     }
     match /workspaces/{space}/items/{itemId} {
-      allow read: if member() && validWorkspace(space);
-      allow create, update: if member() && validWorkspace(space) && validItem();
-      allow delete: if member() && space == 'test';
+      allow read: if authorized() && workspace(space);
+      allow create: if editor() && workspace(space) && validItem() && createdByUser()
+        && exists(/databases/$(database)/documents/workspaces/$(space)/rooms/$(request.resource.data.roomId));
+      allow update: if editor() && workspace(space) && validItem() && updatedByUser();
+      allow delete: if editor() && space == 'test';
+    }
+    match /workspaces/{space}/activity/{eventId} {
+      allow read: if authorized() && workspace(space);
+      allow write: if false;
     }
     match /{document=**} { allow read, write: if false; }
   }
