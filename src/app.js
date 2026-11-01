@@ -60,6 +60,17 @@ function errMessage(error) {
   return error?.message || 'Something went wrong. Please try again.';
 }
 function catchError(error) { console.error(error); toast(errMessage(error), true); }
+async function getMembership(user) {
+  if (!user?.uid) throw new Error('Sign in to access the inventory.');
+  await reload(user);
+  if (!user.emailVerified) throw new Error('Verify your email address before accessing inventory.');
+  const snapshot = await getDoc(doc(db,'authorizedUsers',user.uid));
+  if (!snapshot.exists() || snapshot.data().active !== true) {
+    throw new Error('Account authorization has not been completed.');
+  }
+  return snapshot.data();
+}
+
 const phase3=initPhase3({state,db,call,E,header,modeBanner,canEdit,isOwner,roomName,activeRooms,
   activeItems,getPerson,toast,catchError,openModal,modalHeading,closeModal,confirmDialog,renderMain});
 const phase4=initPhase4({state,call,toast,catchError,canEdit,isOwner,E,openModal,modalHeading,closeModal,
