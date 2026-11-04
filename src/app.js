@@ -1,5 +1,5 @@
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-app.js';
-import { initPhase3 } from './phase3.js?v=20261101-forms3';
+import { initPhase3 } from './phase3.js?v=20261103-design1';
 import { bindRoomSaveForm } from './room-save.js?v=20261101-roomsave1';
 import { bindItemSaveForm } from './item-save.js?v=20261101-itemsave2';
 import { initPhase4 } from './phase4.js?v=20261101-forms3';

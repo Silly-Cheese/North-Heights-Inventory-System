@@ -2,6 +2,17 @@
 
 Private inventory system for North Heights Church of Christ. **Hosting: GitHub Pages. Backend: Firebase Authentication, Firestore, Firebase Storage. NO Cloud Functions.**
 
+### Design and report refresh (November 2026)
+- Redesigned desktop/mobile interface: North Heights colors, navigation, panels, room cards, inventory tables, forms and responsive spacing.
+- Rebuilt the Reports page as a structured report builder with source details and archived snapshot list.
+- New professional PDF format: church letterhead, report summary, actual wrapped tables, room-group headings, continuation headers, page numbering, source/workspace identification, and prepared/reviewed signature fields.
+- Original CSV exports remain available with the same complete underlying fields.
+- PDF text wraps and paginates; long inventory notes are not cut off.
+- PDF source: `src/report-pdf.js`. UI theme: `src/redesign.css`. Regression checks: `tests/report-pdf.test.mjs`.
+- This update is UI/formatting only: existing Firestore records, user roles and item storage are not migrated or deleted.
+
+**[Report formats and verification checklist](docs/REPORTS-AND-DESIGN.md)**
+
 ### Phase 4
 - Owner bootstrap via email verification and Firestore security rules; no manual Auth user or per-user Firestore document required.
 - One-use authorization codes for Inventory Collaborators and read-only Members; codes expire in about seven days.

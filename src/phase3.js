@@ -1,7 +1,8 @@
 import { collection, getDocs, onSnapshot } from 'https://www.gstatic.com/firebasejs/13.1.0/firebase-firestore.js';
+import { buildInventoryPdf } from './report-pdf.js?v=20261103-report1';
 
 // The report/disposition UI is deliberately isolated from the Phase 1/2 editor.
-// All authorization and final decisions are enforced by Firebase Functions and rules.
+// Authorization and property decisions are enforced by Firestore Security Rules.
 export function initPhase3(env) {
   const {state,db,call,E,header,modeBanner,canEdit,isOwner,roomName,activeRooms,
     activeItems,getPerson,toast,catchError,openModal,modalHeading,closeModal,confirmDialog,renderMain}=env;
@@ -148,8 +149,8 @@ export function initPhase3(env) {
           ...TYPES.map(k=>quantities[k]||0),d?.unallocated??i.quantity,d?.notes||'',d?.reviewedBy||'']);
       });
     }
-    if(rows.length===1)rows.push(Array(rows[0].length).fill(''));
-    return {title:titles[p.reportType],rows,roomCount:rooms.length,itemTypes:filtered.length,
+    return {title:titles[p.reportType],reportType:p.reportType,roomFilter:p.roomId,rows,
+      roomCount:p.roomId==='all'?rooms.length:rooms.some(r=>r.id===p.roomId)?1:0,itemTypes:filtered.length,
       units:filtered.reduce((n,i)=>n+i.quantity,0),
       source:data.label||'Current working inventory',
       createdAt:data.createdAt||new Date().toLocaleString(),
@@ -202,44 +203,34 @@ export function initPhase3(env) {
   async function exportPDF(){
     const report=reportData(await currentDataset());
     const {jsPDF}=await import('https://cdn.jsdelivr.net/npm/jspdf@2.5.2/+esm');
-    const pdf=new jsPDF({orientation:report.rows[0].length>8?'landscape':'portrait',unit:'mm',format:'a4'});
-    const width=pdf.internal.pageSize.getWidth(),height=pdf.internal.pageSize.getHeight();
-    const left=14,right=width-14;
-    let y=16,page=1;
-    const line=(value,size=9,bold=false)=>{
-      pdf.setFont('helvetica',bold?'bold':'normal');pdf.setFontSize(size);
-      const text=pdf.splitTextToSize(String(value??''),right-left);
-      for(const t of text){
-        if(y>height-19){pdf.addPage();page++;y=18;}
-        pdf.text(t,left,y);y+=size*.43+1.7;
-      }
-    };
-    const divider=()=>{pdf.setDrawColor(210,220,217);pdf.line(left,y,right,y);y+=4;};
-    line('NORTH HEIGHTS CHURCH OF CHRIST',12,true);
-    line(report.title,16,true);line('Source: '+report.source,9);
-    line('Created: '+report.createdAt,9);line('Room count: '+report.roomCount+'   Item types: '+report.itemTypes+'   Units: '+report.units,9);
-    y+=3;divider();
-    const [columns,...rows]=report.rows;
-    line(columns.join(' | '),8,true);divider();
-    rows.forEach(row=>{line(row.map((value,i)=>columns[i]+': '+String(value??'')).join('    |    '),8);y+=1;divider();});
-    y+=3;line(report.warning,8);y+=6;
-    line('Prepared by: __________________________    Date: ______________',9);
-    line('Reviewed by: __________________________    Date: ______________',9);
-    for(let n=1;n<=pdf.getNumberOfPages();n++){
-      pdf.setPage(n);pdf.setFontSize(8);pdf.setTextColor(110);
-      pdf.text('North Heights Inventory · '+state.space.toUpperCase()+' · Page '+n+' / '+pdf.getNumberOfPages(),left,height-10);
-    }
-    pdf.save(filename('pdf'));toast('PDF report downloaded.');
+    const pdf=new jsPDF({
+      orientation:report.reportType==='full'||report.reportType==='disposition'?'landscape':
+        report.reportType==='room'&&report.roomFilter==='all'?'landscape':'portrait',
+      unit:'mm',format:'a4',compress:true
+    });
+    buildInventoryPdf(pdf,report,{workspace:state.space});
+    pdf.save(filename('pdf'));
+    toast('Designed PDF report downloaded.');
   }
   async function printReport(){
     const report=reportData(await currentDataset());
-    const root=document.createElement('div');root.id='phase3PrintRoot';
-    root.innerHTML='<h1>North Heights Church of Christ</h1><h2>'+E(report.title)+'</h2>'+
-      '<p>Source: '+E(report.source)+' · '+E(report.createdAt)+'</p>'+
-      '<p>'+report.roomCount+' rooms · '+report.itemTypes+' item types · '+report.units+' total units</p>'+
+    const root=document.createElement('div');
+    root.id='phase3PrintRoot';
+    const heading='<div class="rpt-print-brand"><div class="rpt-print-mark">NH</div>'+
+      '<div><span>NORTH HEIGHTS CHURCH OF CHRIST</span><small>CONGREGATIONAL PROPERTY INVENTORY</small></div>'+
+      '<strong>'+E(state.space.toUpperCase())+' RECORD</strong></div>';
+    root.innerHTML=heading+'<div class="rpt-print-heading"><h1>'+E(report.title)+'</h1>'+
+      '<p>'+E(report.source)+' · '+E(report.createdAt)+'</p></div>'+
+      '<div class="rpt-print-metrics"><div>ROOMS <strong>'+report.roomCount+'</strong></div>'+
+      '<div>ITEM TYPES <strong>'+report.itemTypes+'</strong></div>'+
+      '<div>TOTAL UNITS <strong>'+report.units.toLocaleString()+'</strong></div></div>'+
       '<table><thead><tr>'+report.rows[0].map(col=>'<th>'+E(col)+'</th>').join('')+'</tr></thead><tbody>'+
-      report.rows.slice(1).map(row=>'<tr>'+row.map(v=>'<td>'+E(v)+'</td>').join('')+'</tr>').join('')+'</tbody></table>'+
-      '<p>'+E(report.warning)+'</p><div class="signatures">Prepared by: _____________________ &nbsp;&nbsp; Date: __________</div>';
+      report.rows.slice(1).map(row=>'<tr>'+row.map(v=>'<td>'+E(v)+'</td>').join('')+'</tr>').join('')+
+      '</tbody></table>'+
+      '<div class="rpt-print-review"><h3>Record review</h3>'+
+      '<div>Prepared by: __________________________ &nbsp; Date: ____________</div>'+
+      '<div>Reviewed by: __________________________ &nbsp; Date: ____________</div>'+
+      '<p>'+E(report.warning)+'</p></div>';
     document.body.append(root);
     const cleanup=()=>{root.remove();window.removeEventListener('afterprint',cleanup);};
     window.addEventListener('afterprint',cleanup,{once:true});
@@ -247,36 +238,78 @@ export function initPhase3(env) {
     setTimeout(cleanup,60000);
   }
   function reportPage(){
-    const rooms=activeRooms();
-    let html=header('Reports & snapshots','Export inventories, evaluate item condition, and preserve dated records.')+modeBanner();
-    html+='<div class="panel panel-pad"><h2>Report builder</h2><p class="small muted">Choose a report type and either the live workspace or a completed frozen snapshot.</p>'+
-      '<div class="p3-report-controls"><div class="field"><label>Report type</label><select id="p3ReportType">'+
-      [['full','Full inventory'],['room','Room inventory'],['condition','Condition summary'],['disposition','Disposition register']].map(([k,v])=>'<option value="'+k+'" '+(p.reportType===k?'selected':'')+'>'+E(v)+'</option>').join('')+
-      '</select></div><div class="field"><label>Room filter</label><select id="p3RoomFilter">'+
+    const rooms=p.loadedSnapshot?.rooms || activeRooms();
+    const sourceMeta=(state.snapshots||[]).find(s=>s.id===p.source);
+    const liveReport=reportData(liveDataset());
+    const reportDescriptions={
+      full:'A comprehensive register of belongings organized by room, with quantities, conditions and notes.',
+      room:'A focused room-by-room record that is easy to print, verify and share with leadership.',
+      condition:'A concise summary of the condition of the congregation\'s inventoried property.',
+      disposition:'An approval-aware register of proposed retention, property transfer, donation, sale or disposal.'
+    };
+    const options=[['full','Full inventory'],['room','Room inventory'],['condition','Condition summary'],['disposition','Disposition register']];
+    const sourceType=p.source==='live'?'Live working data':'Dated archived snapshot';
+    const displayRooms=sourceMeta?.roomCount ?? liveReport.roomCount;
+    const displayTypes=sourceMeta?.itemTypes ?? liveReport.itemTypes;
+    const displayUnits=sourceMeta?.totalUnits ?? liveReport.units;
+    let html=header('Inventory reports','Produce clear, professional records for reviewing church property and preparing for the building transition.')+modeBanner();
+    html+='<div class="rpt-hero">'+
+      '<div class="rpt-hero-heading"><div><span class="rpt-kicker">NORTH HEIGHTS · RECORDS OFFICE</span>'+
+      '<h2>Every item accounted for.</h2>'+
+      '<p>Create an inventory register, review conditions, document planned dispositions, or preserve a dated snapshot.</p></div>'+
+      '<span class="rpt-hero-icon" aria-hidden="true">▤</span></div>'+
+      '<div class="rpt-summary-strip">'+
+      [['Rooms',displayRooms],['Item types',displayTypes],['Total units',displayUnits]].map(([name,value])=>
+        '<div><span>'+E(name)+'</span><strong>'+Number(value||0).toLocaleString()+'</strong></div>').join('')+
+      '</div></div>';
+    html+='<div class="rpt-layout">'+
+      '<section class="panel rpt-builder"><div class="rpt-section-heading"><span class="rpt-step">01</span><div>'+
+      '<h2>Build a report</h2><p>Choose the details you need, then download your finished record.</p></div></div>'+
+      '<div class="rpt-form-grid">'+
+      '<div class="field"><label for="p3ReportType">Record format</label><select id="p3ReportType">'+
+      options.map(([k,v])=>'<option value="'+k+'" '+(p.reportType===k?'selected':'')+'>'+E(v)+'</option>').join('')+
+      '</select></div>'+
+      '<div class="field"><label for="p3RoomFilter">Room</label><select id="p3RoomFilter">'+
       '<option value="all">All rooms</option>'+rooms.map(r=>'<option value="'+E(r.id)+'" '+(p.roomId===r.id?'selected':'')+'>'+E(r.name)+'</option>').join('')+
-      '</select></div><div class="field"><label>Data source</label><select id="p3Source">'+
-      '<option value="live" '+(p.source==='live'?'selected':'')+'>Live working inventory</option>'+
+      '</select></div>'+
+      '<div class="field rpt-source-field"><label for="p3Source">Record source</label><select id="p3Source">'+
+      '<option value="live" '+(p.source==='live'?'selected':'')+'>Current working inventory</option>'+
       (state.snapshots||[]).filter(s=>s.status==='complete').map(s=>
-        '<option value="'+E(s.id)+'" '+(p.source===s.id?'selected':'')+'>'+E(s.label)+' ('+E(s.type)+')</option>').join('')+
+        '<option value="'+E(s.id)+'" '+(p.source===s.id?'selected':'')+'>'+E(s.label)+' · '+E(s.type)+'</option>').join('')+
       '</select></div></div>'+
-      (p.source!=='live'?'<p class="small muted">Frozen snapshot selected; its records are loaded when generating a report.</p>':'')+
-      '<div class="btn-row" style="margin-top:16px">'+
-      btn('pdf','Download PDF','','btn primary')+btn('csv','Download CSV')+btn('print','Print report')+'</div></div>';
-    html+='<div class="panel panel-pad" style="margin-top:18px"><div class="section-head"><h2>Inventory snapshots</h2>'+
-      ((state.space==='test'?canEdit():isOwner())?btn('createSnapshot','+ Save snapshot','','btn primary'):'')+'</div>'+
-      '<p class="small muted">A snapshot saves a dated copy of room, item, and disposition records. Official final snapshots require all rooms verified and no pending/stale dispositions.</p>';
+      '<div class="rpt-format-note"><span class="rpt-note-dot"></span><p><strong>'+E(options.find(o=>o[0]===p.reportType)?.[1]||'Inventory report')+'</strong> — '+
+      E(reportDescriptions[p.reportType]||'Select a report type to preview it.')+'</p></div>'+
+      '<div class="rpt-export-actions">'+
+      btn('pdf','Download designed PDF','','btn primary')+
+      btn('csv','Export spreadsheet CSV')+
+      btn('print','Print record')+'</div>'+
+      '<p class="rpt-helper">PDFs include a North Heights letterhead, organized tables, page numbers, and a review section. CSV files retain the full underlying columns.</p></section>'+
+      '<aside class="panel rpt-report-info"><div class="rpt-section-heading"><span class="rpt-step">02</span>'+
+      '<div><h2>Report details</h2><p>Confirm your source before sharing.</p></div></div>'+
+      '<div class="rpt-detail-line"><span>Workspace</span><strong>'+E(state.space.toUpperCase())+'</strong></div>'+
+      '<div class="rpt-detail-line"><span>Source</span><strong>'+E(sourceType)+'</strong></div>'+
+      '<div class="rpt-detail-line"><span>Selected rooms</span><strong>'+E(p.roomId==='all'?'All rooms':rooms.find(r=>r.id===p.roomId)?.name||'Room not found')+'</strong></div>'+
+      (sourceMeta?'<div class="rpt-detail-line"><span>Snapshot</span><strong>'+E(sourceMeta.label)+'</strong></div>':'')+
+      '<div class="rpt-info-foot">This report reflects '+E(p.source==='live'?'current working records':'the selected saved snapshot')+
+      '. It is an inventory record, not authorization to transfer congregation property.</div></aside></div>';
     const snaps=state.snapshots||[];
-    html+=snaps.length?snaps.map(s=>'<div class="list-row"><div><strong>'+E(s.label)+'</strong><p>'+
-      E(s.type)+' · '+E(s.status)+' · '+Number(s.roomCount||0)+' rooms · '+Number(s.totalUnits||0)+' units · '+
-      E(s.createdAt?.toDate?.()?.toLocaleString()||'')+'</p></div><div class="inline-actions">'+
-      (s.status==='complete'?btn('loadSnapshot','Use for report',s.id):'')+
-      (state.space==='test'&&canEdit()?btn('deleteSnapshot','Delete',s.id,'btn sm danger'):'')+
-      '</div></div>').join(''):'<p class="small muted">No snapshots have been saved yet.</p>';
-    html+='</div>';
-    const report=reportData(liveDataset());
-    html+='<div class="panel panel-pad" style="margin-top:18px"><h2>Live inventory summary</h2><p class="muted small">'+
-      report.roomCount+' rooms · '+report.itemTypes+' item types · '+report.units+' units</p>'+
-      '<p class="small muted">The report builder can export these records or an earlier frozen snapshot.</p></div>';
+    html+='<section class="panel rpt-snapshots"><div class="rpt-snapshots-top"><div><span class="rpt-kicker">DOCUMENT ARCHIVE</span>'+
+      '<h2>Saved inventory snapshots</h2><p>Preserve a dated copy for reference even after working quantities change.</p></div>'+
+      ((state.space==='test'?canEdit():isOwner())?btn('createSnapshot','+ Save snapshot','','btn primary'):'')+'</div>'+
+      (snaps.length?
+        '<div class="rpt-snapshot-list">'+snaps.map(s=>
+        '<div class="rpt-snapshot-entry"><div class="rpt-snapshot-icon" aria-hidden="true">▣</div>'+
+        '<div class="rpt-snapshot-body"><strong>'+E(s.label)+'</strong><p>'+
+        E(s.type||'draft')+' · '+Number(s.roomCount||0)+' rooms · '+Number(s.totalUnits||0).toLocaleString()+
+        ' units · '+E(s.createdAt?.toDate?.()?.toLocaleDateString()||'Date unavailable')+'</p></div>'+
+        '<span class="badge '+(s.status==='complete'?'':'slate')+'">'+E(s.status||'pending')+'</span>'+
+        '<div class="rpt-snapshot-actions">'+
+        (s.status==='complete'?btn('loadSnapshot','Use',''+s.id):'')+
+        (state.space==='test'&&canEdit()?btn('deleteSnapshot','Delete',s.id,'btn sm danger'):'')+
+        '</div></div>').join('')+'</div>':
+        '<div class="rpt-empty-archive"><div aria-hidden="true">▢</div><h3>No snapshots yet</h3>'+
+        '<p>Your dated records will appear here after you save your first snapshot.</p></div>')+
+      '</section>';
     return html;
   }
   function snapshotEditor(){
