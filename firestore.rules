@@ -59,6 +59,12 @@ service cloud.firestore {
         ownerEligible() && !exists(setupDoc()) &&
         getAfter(setupDoc()).data.ownerUid == request.auth.uid;
     }
+    function counterSelfRegistration() {
+      // Self-registration grants only Inventory Counter, never owner access.
+      return request.resource.data.role == 'inventory' &&
+        request.resource.data.invitedBy == '' &&
+        request.resource.data.inviteId == '';
+    }
     function invitedFields(uid) {
       return request.resource.data.role in ['inventory','member'] &&
         request.resource.data.inviteId is string &&
@@ -83,7 +89,7 @@ service cloud.firestore {
     match /authorizedUsers/{uid} {
       allow get: if authorized() && (request.auth.uid == uid || editor());
       allow list: if editor();
-      allow create: if identityValid(uid) && (ownerFields() || invitedFields(uid));
+      allow create: if identityValid(uid) && (ownerFields() || counterSelfRegistration() || invitedFields(uid));
       allow update: if owner() && uid != request.auth.uid &&
         resource.data.role != 'owner' &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['active','disabledAt','disabledBy']) &&
