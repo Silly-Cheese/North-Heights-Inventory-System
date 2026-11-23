@@ -10,13 +10,13 @@ service cloud.firestore {
     function inviteDoc(id) { return /databases/$(database)/documents/invites/$(id); }
     function setupDoc() { return /databases/$(database)/documents/system/bootstrap; }
     function memberExists() { return signedIn() && exists(userDoc(request.auth.uid)); }
-    function authorized() { return memberExists() && get(userDoc(request.auth.uid)).data.active == true && verified(); }
+    function authorized() { return memberExists() && get(userDoc(request.auth.uid)).data.active == true; }
     function role() { return get(userDoc(request.auth.uid)).data.role; }
     function editor() { return authorized() && role() in ['owner','inventory']; }
     function owner() { return authorized() && role() == 'owner'; }
     function workspace(space) { return space in ['test','official']; }
     function identityValid(uid) {
-      return verified() && request.auth.uid == uid &&
+      return signedIn() && request.auth.uid == uid &&
         request.resource.data.keys().hasOnly(['uid','email','displayName','role','active','createdAt','invitedBy','inviteId']) &&
         request.resource.data.keys().hasAll(['uid','email','displayName','role','active','createdAt','invitedBy','inviteId']) &&
         request.resource.data.uid == uid && request.resource.data.email == request.auth.token.email &&
