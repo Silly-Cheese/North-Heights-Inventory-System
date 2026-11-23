@@ -183,13 +183,13 @@ async function finishEnrollment(form,owner){
       return;
     }
     if(owner)await call('bootstrapOwner',{displayName});
-    else await call('redeemInvite',{code:String(fd.get('code')||''),displayName});
+    else await call('registerCounter',{displayName});
     const member=await getMembership(auth.currentUser);
     state.user=auth.currentUser;state.member=member;
     $('auth').hidden=true;$('app').hidden=false;
     phase4.start(state.user.uid).catch(catchError);
     form.reset();state.ownerCreated=true;subscribe();
-    toast(owner?'Owner account initialized.':'Account authorized.');
+    toast(owner?'Owner account initialized.':'Inventory Counter account created.');
   }catch(error){
     console.error(error);errorEl.textContent=errMessage(error);
   }finally{state.enrolling=false;submit.disabled=false;}
@@ -209,8 +209,8 @@ onAuthStateChanged(auth,async user=>{
   }catch(error){
     $('app').hidden=true;$('auth').hidden=false;
     $('loginError').textContent=user.emailVerified?
-      'This account is not authorized yet. Use Have a code? or Owner setup to finish registration.':
-      'Your email is not verified yet. Select Have a code? or Owner setup and resubmit to receive a verification link.';
+      'Account setup is incomplete. Select Create account to finish registration, or Owner setup if you are the owner.':
+      'Your email is not verified yet. Select Create account (or Owner setup) and submit again to receive a verification link.';
     refreshSetupStatus();
   }
 });
