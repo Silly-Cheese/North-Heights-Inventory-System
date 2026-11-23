@@ -15,7 +15,7 @@ Private inventory system for North Heights Church of Christ. **Hosting: GitHub P
 
 ### Phase 4
 - Owner bootstrap via email verification and Firestore security rules; no manual Auth user or per-user Firestore document required.
-- Open self-registration for Inventory Counters after email verification, with no authorization code. Existing invitation codes remain available for read-only Members.
+- Open self-registration for Inventory Counters without email verification or authorization codes. Existing invitation codes remain available for read-only Members.
 - Rooms, items, quantity adjustments, photos, assignments, verification, Trash and Test workspace.
 - PDF/CSV exports, disposition proposals and owner approvals, dated inventory snapshots.
 - Printable room QR labels.
@@ -37,7 +37,7 @@ Do not deploy Functions; no IAM/service-agent changes or Google Cloud Console ar
 
 The site is designed for: https://silly-cheese.github.io/North-Heights-Inventory-System/
 
-**Security notes:** Anyone with the site link can create a verified Inventory Counter account and edit inventory data. Share the link only with trusted people; this is intentionally open registration. GitHub Pages is public static hosting, but application data is private in Firestore/Storage with restrictive rules. Email verification is required for membership. Owner registration works only with your preconfigured owner email. Test and Official spaces use the same Firebase project but different namespaces. Client-generated snapshots and activity history are operational records, not legally immutable audit evidence.
+**Security notes:** Anyone with the site link can create an Inventory Counter account without verifying email ownership and edit inventory data. Share the link only with trusted people; this is intentionally open registration. GitHub Pages is public static hosting, but application data is private in Firestore/Storage with restrictive rules. Email verification is not required for Inventory Counters. First-time Owner setup still requires email verification to prevent unauthorized owner claims, and only works with your preconfigured owner email. Test and Official spaces use the same Firebase project but different namespaces. Client-generated snapshots and activity history are operational records, not legally immutable audit evidence.
 
 **Known limitations:** A fully offline cold start is not guaranteed because SDK and PDF/QR resources can be loaded from CDNs. Offline *count adjustments* can be queued after the app loads. Photos use token-bearing download links. Deleting test data is best effort across multiple batches and could leave orphaned photos from older records.
 
