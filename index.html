@@ -24,7 +24,7 @@
       <p class="muted">A private workspace for documenting and organizing the congregation's property.</p>
       <div class="auth-tabs">
         <button type="button" class="auth-tab active" data-auth-mode="login">Sign in</button>
-        <button type="button" class="auth-tab" data-auth-mode="register">Have a code?</button>
+        <button type="button" class="auth-tab" data-auth-mode="register">Create account</button>
         <button type="button" class="auth-tab" data-auth-mode="bootstrap" id="bootstrapNav">Owner setup</button>
       </div>
       <form id="loginForm" class="form-stack">
@@ -36,16 +36,14 @@
         <p id="loginError" class="form-error" role="alert" aria-live="polite"></p>
       </form>
       <form id="registerForm" class="form-stack" hidden>
-        <p class="small muted">Create your personal account using the authorization code from the North Heights inventory owner.</p>
+        <p class="small muted">Create an account to help count North Heights inventory. New accounts are Inventory Counters after email verification.</p>
         <label for="regName">Full name</label>
         <input id="regName" name="displayName" minlength="2" maxlength="80" autocomplete="name" required>
         <label for="regEmail">Email address</label>
         <input id="regEmail" name="email" type="email" autocomplete="email" required>
         <label for="regPassword">Choose password</label>
         <input id="regPassword" name="password" type="password" minlength="6" autocomplete="new-password" required>
-        <label for="regCode">Authorization code</label>
-        <input id="regCode" name="code" placeholder="XXXXX-XXXXX-XXXXX-XXXXX" autocomplete="off" maxlength="30" required>
-        <button class="btn primary full" type="submit">Create authorized account</button>
+        <button class="btn primary full" type="submit">Create inventory counter account</button>
         <p id="registerError" class="form-error" role="alert" aria-live="polite"></p>
       </form>
       <form id="bootstrapForm" class="form-stack" hidden>
@@ -60,7 +58,7 @@
         <p id="bootstrapError" class="form-error" role="alert" aria-live="polite"></p>
       </form>
       <button type="button" id="switchAccount" class="btn full" style="margin-top:12px">Use a different account / Sign out</button>
-      <div class="auth-footer">Access is restricted to approved North Heights inventory members.</div>
+      <div class="auth-footer">Inventory access requires an account and verified email address.</div>
     </div>
   </section>
   <div id="app" hidden></div>
