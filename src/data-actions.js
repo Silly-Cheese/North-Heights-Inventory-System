@@ -33,6 +33,10 @@ export function initDataActions({db,auth,storage,storageRef,deleteObject,state})
    batch.set(doc(db,'system','bootstrap'),{ownerUid:uid(),createdAt:serverTimestamp()});
    await batch.commit();return {ok:true};
  }
+ async function registerCounter({displayName}){
+   await setDoc(memberRef(),identity(displayName,'inventory'));
+   return {ok:true};
+ }
  async function createInvite({role,email}){
    requireOwner();
    if(!['inventory','member'].includes(role))throw Error('Invalid invitation role.');
@@ -297,7 +301,7 @@ export function initDataActions({db,auth,storage,storageRef,deleteObject,state})
      roomId:event.roomId||null,beforeQuantity:event.beforeQuantity??null,
      afterQuantity:event.afterQuantity??null,createdAt:serverTimestamp()});
  }
- const handlers={bootstrapOwner,createInvite,redeemInvite,revokeInvite,disableMember,
+ const handlers={bootstrapOwner,registerCounter,createInvite,redeemInvite,revokeInvite,disableMember,
    proposeDisposition,reviewDisposition,createInventorySnapshot,deleteTestSnapshot,
    resetTestWorkspace,reconcileCount};
  return {invoke:async(name,data={})=>{
