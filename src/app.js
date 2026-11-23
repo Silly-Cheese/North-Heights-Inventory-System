@@ -56,7 +56,7 @@ function toast(message, error = false) {
 }
 function errMessage(error) {
   const code = error?.code || '';
-  if (code.includes('permission-denied')) return 'Access denied. Check your verified email, account role, and deployed Firestore rules.';
+  if (code.includes('permission-denied')) return 'Access denied. Check your account role and deployed Firestore rules.';
   if (code.includes('auth/invalid-credential') || code.includes('auth/wrong-password')) return 'Incorrect email or password.';
   if (code.includes('auth/too-many-requests')) return 'Too many attempts. Try again later.';
   return error?.message || 'Something went wrong. Please try again.';
@@ -65,7 +65,6 @@ function catchError(error) { console.error(error); toast(errMessage(error), true
 async function getMembership(user) {
   if (!user?.uid) throw new Error('Sign in to access the inventory.');
   await reload(user);
-  if (!user.emailVerified) throw new Error('Verify your email address before accessing inventory.');
   const snapshot = await getDoc(doc(db,'authorizedUsers',user.uid));
   if (!snapshot.exists() || snapshot.data().active !== true) {
     throw new Error('Account authorization has not been completed.');
@@ -177,9 +176,9 @@ async function finishEnrollment(form,owner){
     }
     await reload(auth.currentUser);
     await getIdToken(auth.currentUser,true);
-    if(!auth.currentUser.emailVerified){
+    if(owner && !auth.currentUser.emailVerified){
       await sendEmailVerification(auth.currentUser);
-      errorEl.textContent='We sent you an email verification link. Open it, then return here and submit this form again using the same email. Your new Authentication account already exists.';
+      errorEl.textContent='Owner setup requires verified email ownership. Open the verification link we emailed you, then return here and submit this form again.';
       return;
     }
     if(owner)await call('bootstrapOwner',{displayName});
@@ -208,9 +207,7 @@ onAuthStateChanged(auth,async user=>{
     phase4.start(user.uid).catch(catchError);subscribe();
   }catch(error){
     $('app').hidden=true;$('auth').hidden=false;
-    $('loginError').textContent=user.emailVerified?
-      'Account setup is incomplete. Select Create account to finish registration, or Owner setup if you are the owner.':
-      'Your email is not verified yet. Select Create account (or Owner setup) and submit again to receive a verification link.';
+    $('loginError').textContent='Account setup is incomplete. Select Create account to finish registration, or Owner setup if you are the owner.';
     refreshSetupStatus();
   }
 });
